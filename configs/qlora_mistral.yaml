@@ -1,0 +1,33 @@
+model:
+  name: mistralai/Mistral-7B-Instruct-v0.3
+  device_map: null
+
+qlora:
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: bfloat16
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_modules: all-linear
+
+training:
+  output_dir: outputs/code-review-mistral-qlora
+  max_length: 1024
+  packing: false
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.03
+  logging_steps: 5
+  save_steps: 50
+  eval_steps: 50
+  save_total_limit: 2
+  gradient_checkpointing: true
+  report_to: none
+  seed: 42

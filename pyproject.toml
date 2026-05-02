@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "review-tuner"
+version = "0.1.0"
+description = "QLoRA fine-tuning and golden-set evaluation harness for code review comment generation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Sebastian Forbes" }]
+keywords = ["qlora", "llm", "code-review", "evaluation", "peft"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5.0",
+]
+train = [
+  "accelerate>=0.34.0",
+  "bitsandbytes>=0.43.0; platform_system != 'Darwin'",
+  "datasets>=2.20.0",
+  "peft>=0.12.0",
+  "pyyaml>=6.0.0",
+  "torch>=2.3.0",
+  "transformers>=4.44.0",
+  "trl>=0.11.0",
+]
+eval-embeddings = [
+  "sentence-transformers>=3.0.0",
+]
+
+[project.scripts]
+review-train-qlora = "review_tuner.train_qlora:main"
+review-eval = "review_tuner.evaluate:main"
+review-infer = "review_tuner.infer:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

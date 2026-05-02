@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Model and experiment artifacts
+outputs/
+checkpoints/
+adapters/
+wandb/
+mlruns/
+reports/*.json
+reports/*.jsonl
+reports/*.html
+!reports/.gitkeep
+
+# Local secrets
+.env
+.env.*
+hf_token.txt
