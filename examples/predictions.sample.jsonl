@@ -1,0 +1,4 @@
+{"id":"golden-001","prediction":"This no longer rejects expired refresh tokens before issuing access tokens. Please restore the expires_at check and add a regression test for expired refresh tokens.","severity":"high","tags":["security","tests"]}
+{"id":"golden-002","prediction":"Removing the limit allows a large account to fetch the full order history in one request. Please keep pagination enforced and test the default limit.","severity":"medium","tags":["performance","tests"]}
+{"id":"golden-003","prediction":"The loop now runs one extra attempt beyond the configured retry budget. Please keep i < attempts or update the contract and tests accordingly.","severity":"medium","tags":["correctness","tests"]}
+{"id":"golden-004","prediction":"This compares and stores API keys as raw tokens. Please keep hashing and constant-time comparison so persisted keys do not become usable credentials.","severity":"blocker","tags":["security","correctness"]}
