@@ -1,5 +1,7 @@
 # QLoRA Code Review Comment Tuner
 
+[![CI](https://github.com/Sebby1770/qlora-code-review-eval-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/qlora-code-review-eval-harness/actions/workflows/ci.yml)
+
 Fine-tune a compact causal LLM to write code review comments, then score it with a
 repeatable golden-set harness. The repo is intentionally split into two paths:
 
@@ -46,8 +48,7 @@ Training rows use `review_comment`; golden rows use `expected_comment`.
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-make test
-make smoke-eval
+make verify
 ```
 
 The smoke evaluation writes:
@@ -99,7 +100,9 @@ PYTHONPATH=src python -m review_tuner.infer \
   --model mistralai/Mistral-7B-Instruct-v0.3 \
   --adapter outputs/code-review-mistral-qlora \
   --golden data/golden/code_review_golden.jsonl \
-  --out reports/predictions.jsonl
+  --out reports/predictions.jsonl \
+  --batch-size 4 \
+  --max-input-tokens 1024
 ```
 
 Score the predictions:
@@ -116,6 +119,14 @@ PYTHONPATH=src python -m review_tuner.evaluate \
 For harness-only validation, omit `--predictions` and the evaluator will use the
 deterministic baseline.
 
+Measure synthetic scoring throughput with warmed, repeated runs:
+
+```bash
+make benchmark
+```
+
+Use `make benchmark-json` when collecting machine-readable results.
+
 ## Metric Philosophy
 
 Exact string match is too brittle for review comments, so the harness combines:
@@ -130,6 +141,33 @@ This gives you a stable gate for regression testing while still allowing natural
 language variation.
 
 ## Implementation Notes
+
+Training configuration is parsed into immutable typed sections before the ML stack is
+loaded. Unknown options, invalid ranges, and incorrectly typed values fail fast with a
+configuration error instead of reaching a long-running GPU job. The defaults in
+`review_tuner.config` are also used by inference, keeping quantization policy consistent.
+
+JSONL readers validate records lazily so training and inference do not retain the complete
+source dataset in Python memory. List-shaped fields such as `tags` and rubric phrases must
+be JSON arrays of non-empty strings. JSONL outputs are streamed through a temporary file
+and atomically replace their destination only after generation succeeds.
+
+Inference batches prompts while preserving record order and truncates inputs to an explicit
+token budget. Evaluation requires an exact one-to-one ID match: duplicate golden IDs,
+missing predictions, unexpected stale predictions, and empty golden sets fail the run.
+The model-agnostic generation core is tested independently of Torch and Transformers, while
+model loading creates bitsandbytes configuration only when 4-bit loading is enabled.
+Scoring normalizes each prediction and target once per example, then reuses those values
+across exact-match, lexical, rubric, and severity metrics.
+Per-example scores stream directly to an atomic JSONL report while online statistics compute
+aggregate means and population deviations in constant memory. Prompt inputs are serialized
+as untrusted JSON and explicitly separated from the model instruction hierarchy.
+
+Release-facing changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and report
+vulnerabilities according to [SECURITY.md](SECURITY.md).
+The verification workflow also installs the built wheel into an isolated environment and
+executes its published CLI, catching distribution-only failures before release.
 
 The QLoRA setup follows the Hugging Face PEFT quantization guide for 4-bit LoRA
 training, TRL's `SFTTrainer` data path, and the Transformers bitsandbytes NF4
