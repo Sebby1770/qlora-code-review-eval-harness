@@ -159,6 +159,9 @@ The model-agnostic generation core is tested independently of Torch and Transfor
 model loading creates bitsandbytes configuration only when 4-bit loading is enabled.
 Scoring normalizes each prediction and target once per example, then reuses those values
 across exact-match, lexical, rubric, and severity metrics.
+Severity validation and inference share one canonical most-severe-first ordering, so
+predictions that mention multiple severity labels resolve deterministically. Composite
+metric weights are validated as one policy object before scoring.
 Per-example scores stream directly to an atomic JSONL report while online statistics compute
 aggregate means and population deviations in constant memory. Prompt inputs are serialized
 as untrusted JSON and explicitly separated from the model instruction hierarchy.

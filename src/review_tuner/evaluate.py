@@ -149,15 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.write_baseline_predictions:
             write_jsonl(
                 args.write_baseline_predictions,
-                [
-                    {
-                        "id": prediction.id,
-                        "prediction": prediction.prediction,
-                        "severity": prediction.severity,
-                        "tags": list(prediction.tags),
-                    }
-                    for prediction in predictions
-                ],
+                (prediction.to_record() for prediction in predictions),
             )
 
         accumulator = ScoreAccumulator()

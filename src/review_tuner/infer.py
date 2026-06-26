@@ -13,6 +13,7 @@ from review_tuner.config import QLoRAConfig
 from review_tuner.data import iter_examples, write_jsonl
 from review_tuner.modeling import (
     ensure_padding_token,
+    generation_pad_token_id,
     make_quantization_config,
     missing_ml_dependency_error,
     torch_dtype,
@@ -77,7 +78,7 @@ def iter_prediction_rows(
                 **encoded,
                 max_new_tokens=limits.max_new_tokens,
                 do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=generation_pad_token_id(tokenizer),
             )
         for example, tokens in zip(example_batch, output, strict=True):
             generated = tokenizer.decode(

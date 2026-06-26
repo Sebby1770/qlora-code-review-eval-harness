@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from review_tuner.config import QLoRAConfig
 from review_tuner.modeling import (
     ensure_padding_token,
+    generation_pad_token_id,
     make_quantization_config,
     missing_ml_dependency_error,
     quantization_kwargs,
@@ -31,11 +32,12 @@ def test_modeling_helpers_share_dtype_and_quantization_policy() -> None:
 
 
 def test_padding_and_dependency_errors_are_consistent() -> None:
-    tokenizer = SimpleNamespace(pad_token=None, eos_token="<eos>")
+    tokenizer = SimpleNamespace(pad_token=None, eos_token="<eos>", eos_token_id=7)
     dependency_error = ModuleNotFoundError(name="transformers")
 
     assert ensure_padding_token(tokenizer) is tokenizer
     assert tokenizer.pad_token == "<eos>"
+    assert generation_pad_token_id(tokenizer) == 7
     assert ".[train]" in str(missing_ml_dependency_error(dependency_error))
 
 

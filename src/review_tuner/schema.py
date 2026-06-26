@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-VALID_SEVERITIES = {"blocker", "high", "medium", "low", "nit"}
+SEVERITY_ORDER = ("blocker", "high", "medium", "low", "nit")
+VALID_SEVERITIES = frozenset(SEVERITY_ORDER)
 
 
 class DatasetError(ValueError):
@@ -110,6 +111,19 @@ class Prediction:
     prediction: str
     severity: str | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
+
+    def to_record(self) -> dict[str, object]:
+        """Serialize the prediction with optional fields omitted when unset."""
+
+        record: dict[str, object] = {
+            "id": self.id,
+            "prediction": self.prediction,
+        }
+        if self.severity is not None:
+            record["severity"] = self.severity
+        if self.tags:
+            record["tags"] = list(self.tags)
+        return record
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], *, row_number: int | None = None) -> Prediction:

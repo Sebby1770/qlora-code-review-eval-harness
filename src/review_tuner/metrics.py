@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from review_tuner.schema import VALID_SEVERITIES, Prediction, ReviewExample
+from review_tuner.schema import SEVERITY_ORDER, Prediction, ReviewExample
 
 _PUNCT_TRANSLATION = str.maketrans({char: " " for char in string.punctuation})
 
@@ -97,10 +97,37 @@ def _infer_severity_from_normalized(text: str, normalized: str) -> str | None:
     match = re.search(r"\bseverity\s+(blocker|high|medium|low|nit)\b", normalized)
     if match:
         return match.group(1)
-    for severity in VALID_SEVERITIES:
+    for severity in SEVERITY_ORDER:
         if f"[{severity}]" in text.lower() or f"{severity} severity" in normalized:
             return severity
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreWeights:
+    """Composite score policy with validation in one place."""
+
+    token_f1: float = 0.35
+    must_mention_recall: float = 0.25
+    severity_accuracy: float = 0.20
+    tag_f1: float = 0.15
+    forbidden_absence: float = 0.05
+
+    def __post_init__(self) -> None:
+        weights = (
+            self.token_f1,
+            self.must_mention_recall,
+            self.severity_accuracy,
+            self.tag_f1,
+            self.forbidden_absence,
+        )
+        if any(weight < 0 for weight in weights):
+            raise ValueError("score weights must be non-negative")
+        if not math.isclose(sum(weights), 1.0):
+            raise ValueError("score weights must sum to 1.0")
+
+
+DEFAULT_SCORE_WEIGHTS = ScoreWeights()
 
 
 @dataclass(frozen=True)
@@ -195,7 +222,12 @@ class ScoreAccumulator:
         return report
 
 
-def score_example(golden: ReviewExample, prediction: Prediction) -> ExampleScore:
+def score_example(
+    golden: ReviewExample,
+    prediction: Prediction,
+    *,
+    weights: ScoreWeights = DEFAULT_SCORE_WEIGHTS,
+) -> ExampleScore:
     """Score one model prediction against one golden example."""
 
     normalized_prediction = normalize_text(prediction.prediction)
@@ -220,11 +252,11 @@ def score_example(golden: ReviewExample, prediction: Prediction) -> ExampleScore
     severity_accuracy = float(predicted_severity == golden.severity)
     tags = f1_for_sets(prediction.tags, golden.tags)
     composite = (
-        0.35 * lexical
-        + 0.25 * mention
-        + 0.20 * severity_accuracy
-        + 0.15 * tags
-        + 0.05 * (1.0 - forbidden)
+        weights.token_f1 * lexical
+        + weights.must_mention_recall * mention
+        + weights.severity_accuracy * severity_accuracy
+        + weights.tag_f1 * tags
+        + weights.forbidden_absence * (1.0 - forbidden)
     )
     return ExampleScore(
         id=golden.id,

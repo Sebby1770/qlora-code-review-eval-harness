@@ -1,4 +1,5 @@
 from review_tuner.metrics import (
+    ScoreWeights,
     f1_for_sets,
     forbidden_rate,
     infer_severity,
@@ -80,3 +81,31 @@ def test_fused_score_path_matches_public_metric_contract() -> None:
         infer_severity(prediction.prediction) == golden.severity
     )
     assert score.tag_f1 == f1_for_sets(prediction.tags, golden.tags)
+
+
+def test_severity_inference_is_deterministic_when_multiple_labels_appear() -> None:
+    assert infer_severity("[low] This is actually [blocker].") == "blocker"
+
+
+def test_score_weights_are_validated_and_reusable() -> None:
+    custom = ScoreWeights(
+        token_f1=1.0,
+        must_mention_recall=0.0,
+        severity_accuracy=0.0,
+        tag_f1=0.0,
+        forbidden_absence=0.0,
+    )
+    golden = ReviewExample(
+        id="golden",
+        diff="+ changed",
+        file_path="service.py",
+        language="python",
+        context="Context.",
+        target_comment="exact target",
+    )
+    prediction = Prediction(id="golden", prediction="different target")
+
+    assert score_example(golden, prediction, weights=custom).composite == token_f1(
+        "different target",
+        "exact target",
+    )

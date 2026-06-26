@@ -39,6 +39,24 @@ def test_schema_normalizes_and_deduplicates_list_fields() -> None:
     assert prediction.tags == ()
 
 
+def test_prediction_serialization_omits_unset_optional_fields() -> None:
+    assert Prediction(id="one", prediction="Looks good.").to_record() == {
+        "id": "one",
+        "prediction": "Looks good.",
+    }
+    assert Prediction(
+        id="one",
+        prediction="Needs tests.",
+        severity="medium",
+        tags=("tests",),
+    ).to_record() == {
+        "id": "one",
+        "prediction": "Needs tests.",
+        "severity": "medium",
+        "tags": ["tests"],
+    }
+
+
 def test_schema_rejects_conflicting_target_fields() -> None:
     with pytest.raises(DatasetError, match="must not conflict"):
         ReviewExample.from_dict(

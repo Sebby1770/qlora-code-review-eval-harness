@@ -60,5 +60,19 @@ def ensure_padding_token(tokenizer: Any) -> Any:
     """Use the EOS token for padding when the model has no explicit pad token."""
 
     if tokenizer.pad_token is None:
+        if tokenizer.eos_token is None:
+            raise RuntimeError("tokenizer must define an EOS token before padding can be inferred")
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
+
+
+def generation_pad_token_id(tokenizer: Any) -> int:
+    """Return the token id to use for deterministic generation padding."""
+
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if isinstance(pad_token_id, int):
+        return pad_token_id
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    if isinstance(eos_token_id, int):
+        return eos_token_id
+    raise RuntimeError("tokenizer must define pad_token_id or eos_token_id for generation")
