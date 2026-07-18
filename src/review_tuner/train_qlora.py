@@ -5,162 +5,232 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
-from review_tuner.data import load_examples
-from review_tuner.prompts import examples_to_sft_rows
+from review_tuner.config import AppConfig, ConfigError, load_config
+from review_tuner.data import iter_examples
+from review_tuner.modeling import (
+    ensure_padding_token,
+    make_quantization_config,
+    missing_ml_dependency_error,
+    torch_dtype,
+)
+from review_tuner.prompts import build_budgeted_sft_text, build_sft_text
 from review_tuner.schema import DatasetError
 
 
-def _missing_training_dependency_error(exc: ModuleNotFoundError) -> RuntimeError:
-    return RuntimeError(
-        f"Missing optional ML dependency {exc.name!r}. Install with: "
-        "python -m pip install -e '.[train]'"
-    )
+class TrainingDataError(DatasetError):
+    """Raised when a validated training row cannot be formatted for SFT."""
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
-    """Load YAML or JSON training config."""
+def _dataset_rows(
+    path: str, tokenizer: Any, max_length: int
+) -> Iterator[dict[str, str]]:
+    examples = iter_examples(path)
+    while True:
+        try:
+            example = next(examples)
+        except StopIteration:
+            return
+        except DatasetError as exc:
+            raise TrainingDataError(str(exc)) from exc
 
-    path = Path(path)
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
-        return json.loads(text)
+        try:
+            text = build_budgeted_sft_text(
+                example,
+                tokenizer=tokenizer,
+                max_length=max_length,
+            )
+        except ValueError as exc:
+            raise TrainingDataError(
+                f"{path}: example {example.id!r} cannot fit the configured "
+                f"training.max_length: {exc}"
+            ) from exc
+        yield {
+            "id": example.id,
+            "text": text,
+        }
+
+
+def _dataset_from_generator(
+    dataset_type: Any,
+    *,
+    path: str,
+    tokenizer: Any,
+    max_length: int,
+    generation_error_type: type[Exception],
+) -> Any:
+    """Create a Dataset while preserving actionable row-formatting failures."""
+
     try:
-        import yaml
-    except ModuleNotFoundError as exc:
-        raise _missing_training_dependency_error(exc) from exc
-    return yaml.safe_load(text)
+        return dataset_type.from_generator(
+            _dataset_rows,
+            gen_kwargs={
+                "path": path,
+                "tokenizer": tokenizer,
+                "max_length": max_length,
+            },
+        )
+    except generation_error_type as exc:
+        cause = exc.__cause__
+        if isinstance(cause, TrainingDataError):
+            raise cause from exc
+        raise
 
 
-def _torch_dtype(name: str):
-    try:
-        import torch
-    except ModuleNotFoundError as exc:
-        raise _missing_training_dependency_error(exc) from exc
-
-    mapping = {
-        "bfloat16": torch.bfloat16,
-        "bf16": torch.bfloat16,
-        "float16": torch.float16,
-        "fp16": torch.float16,
-        "float32": torch.float32,
-        "fp32": torch.float32,
-    }
-    try:
-        return mapping[name.lower()]
-    except KeyError as exc:
-        raise ValueError(f"unsupported dtype {name!r}") from exc
-
-
-def train(config: dict[str, Any], train_path: str, eval_path: str | None = None) -> None:
+def train(config: AppConfig, train_path: str, eval_path: str | None = None) -> None:
     """Run QLoRA fine-tuning using Hugging Face Transformers, PEFT, and TRL."""
 
     try:
-        import torch
-        from datasets import Dataset
-        from peft import LoraConfig, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        from trl import SFTConfig, SFTTrainer
+        import torch  # type: ignore[import-not-found]
+        from datasets import Dataset  # type: ignore[import-not-found]
+        from datasets.exceptions import (  # type: ignore[import-not-found]
+            DatasetGenerationError,
+        )
+        from peft import (  # type: ignore[import-not-found]
+            LoraConfig,
+            prepare_model_for_kbit_training,
+        )
+        from transformers import (  # type: ignore[import-not-found]
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            BitsAndBytesConfig,
+        )
+        from trl import SFTConfig, SFTTrainer  # type: ignore[import-not-found]
     except ModuleNotFoundError as exc:
-        raise _missing_training_dependency_error(exc) from exc
+        raise missing_ml_dependency_error(exc) from exc
 
-    model_cfg = config["model"]
-    qlora_cfg = config["qlora"]
-    train_cfg = config["training"]
+    model_cfg = config.model
+    qlora_cfg = config.qlora
+    train_cfg = config.training
 
-    train_rows = examples_to_sft_rows(load_examples(train_path))
-    eval_rows = examples_to_sft_rows(load_examples(eval_path)) if eval_path else None
-
-    compute_dtype = _torch_dtype(qlora_cfg.get("bnb_4bit_compute_dtype", "bfloat16"))
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=bool(qlora_cfg.get("load_in_4bit", True)),
-        bnb_4bit_quant_type=qlora_cfg.get("bnb_4bit_quant_type", "nf4"),
-        bnb_4bit_use_double_quant=bool(qlora_cfg.get("bnb_4bit_use_double_quant", True)),
-        bnb_4bit_compute_dtype=compute_dtype,
+    compute_dtype = torch_dtype(torch, qlora_cfg.bnb_4bit_compute_dtype)
+    quantization_config = make_quantization_config(
+        qlora_cfg,
+        torch,
+        BitsAndBytesConfig,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_cfg["name"], use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = ensure_padding_token(
+        AutoTokenizer.from_pretrained(model_cfg.name, use_fast=True)
+    )
 
-    model_kwargs: dict[str, Any] = {
-        "quantization_config": quantization_config,
-        "torch_dtype": compute_dtype,
-    }
-    if model_cfg.get("device_map") is not None:
-        model_kwargs["device_map"] = model_cfg["device_map"]
+    train_dataset = _dataset_from_generator(
+        Dataset,
+        path=train_path,
+        tokenizer=tokenizer,
+        max_length=train_cfg.max_length,
+        generation_error_type=DatasetGenerationError,
+    )
+    eval_dataset = (
+        _dataset_from_generator(
+            Dataset,
+            path=eval_path,
+            tokenizer=tokenizer,
+            max_length=train_cfg.max_length,
+            generation_error_type=DatasetGenerationError,
+        )
+        if eval_path
+        else None
+    )
 
-    model = AutoModelForCausalLM.from_pretrained(model_cfg["name"], **model_kwargs)
+    model_kwargs = {"torch_dtype": compute_dtype}
+    if quantization_config is not None:
+        model_kwargs["quantization_config"] = quantization_config
+    if model_cfg.device_map is not None:
+        model_kwargs["device_map"] = model_cfg.device_map
+
+    model = AutoModelForCausalLM.from_pretrained(model_cfg.name, **model_kwargs)
     model.config.use_cache = False
-    model = prepare_model_for_kbit_training(
-        model,
-        use_gradient_checkpointing=bool(train_cfg.get("gradient_checkpointing", True)),
-    )
+    if qlora_cfg.load_in_4bit:
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=train_cfg.gradient_checkpointing,
+        )
 
-    target_modules = qlora_cfg.get("target_modules", "all-linear")
+    target_modules: str | list[str]
+    if isinstance(qlora_cfg.target_modules, tuple):
+        target_modules = list(qlora_cfg.target_modules)
+    else:
+        target_modules = qlora_cfg.target_modules
     lora_config = LoraConfig(
-        r=int(qlora_cfg.get("r", 16)),
-        lora_alpha=int(qlora_cfg.get("lora_alpha", 32)),
-        lora_dropout=float(qlora_cfg.get("lora_dropout", 0.05)),
-        bias=qlora_cfg.get("bias", "none"),
+        r=qlora_cfg.r,
+        lora_alpha=qlora_cfg.lora_alpha,
+        lora_dropout=qlora_cfg.lora_dropout,
+        bias=qlora_cfg.bias,
         task_type="CAUSAL_LM",
         target_modules=target_modules,
     )
 
-    output_dir = train_cfg.get("output_dir", "outputs/code-review-adapter")
+    output_dir = train_cfg.output_dir
+    report_to = (
+        list(train_cfg.report_to)
+        if isinstance(train_cfg.report_to, tuple)
+        else train_cfg.report_to
+    )
     sft_args = SFTConfig(
         output_dir=output_dir,
         dataset_text_field="text",
-        max_length=int(train_cfg.get("max_length", 1024)),
-        packing=bool(train_cfg.get("packing", False)),
-        num_train_epochs=float(train_cfg.get("num_train_epochs", 1.0)),
-        per_device_train_batch_size=int(train_cfg.get("per_device_train_batch_size", 1)),
-        per_device_eval_batch_size=int(train_cfg.get("per_device_eval_batch_size", 1)),
-        gradient_accumulation_steps=int(train_cfg.get("gradient_accumulation_steps", 8)),
-        learning_rate=float(train_cfg.get("learning_rate", 2e-4)),
-        lr_scheduler_type=train_cfg.get("lr_scheduler_type", "cosine"),
-        warmup_ratio=float(train_cfg.get("warmup_ratio", 0.03)),
-        logging_steps=int(train_cfg.get("logging_steps", 10)),
-        save_steps=int(train_cfg.get("save_steps", 100)),
-        eval_strategy="steps" if eval_rows else "no",
-        eval_steps=int(train_cfg.get("eval_steps", 100)) if eval_rows else None,
-        save_total_limit=int(train_cfg.get("save_total_limit", 2)),
+        max_length=train_cfg.max_length,
+        packing=train_cfg.packing,
+        num_train_epochs=train_cfg.num_train_epochs,
+        per_device_train_batch_size=train_cfg.per_device_train_batch_size,
+        per_device_eval_batch_size=train_cfg.per_device_eval_batch_size,
+        gradient_accumulation_steps=train_cfg.gradient_accumulation_steps,
+        learning_rate=train_cfg.learning_rate,
+        lr_scheduler_type=train_cfg.lr_scheduler_type,
+        warmup_ratio=train_cfg.warmup_ratio,
+        logging_steps=train_cfg.logging_steps,
+        save_steps=train_cfg.save_steps,
+        eval_strategy="steps" if eval_dataset is not None else "no",
+        eval_steps=train_cfg.eval_steps if eval_dataset is not None else None,
+        save_total_limit=train_cfg.save_total_limit,
         bf16=compute_dtype is torch.bfloat16,
         fp16=compute_dtype is torch.float16,
-        gradient_checkpointing=bool(train_cfg.get("gradient_checkpointing", True)),
-        report_to=train_cfg.get("report_to", "none"),
-        seed=int(train_cfg.get("seed", 42)),
+        gradient_checkpointing=train_cfg.gradient_checkpointing,
+        report_to=report_to,
+        seed=train_cfg.seed,
     )
 
     trainer = SFTTrainer(
         model=model,
         args=sft_args,
-        train_dataset=Dataset.from_list(train_rows),
-        eval_dataset=Dataset.from_list(eval_rows) if eval_rows else None,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         peft_config=lora_config,
         processing_class=tokenizer,
     )
-    trainer.train(resume_from_checkpoint=train_cfg.get("resume_from_checkpoint"))
+    trainer.train(resume_from_checkpoint=train_cfg.resume_from_checkpoint)
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
 
 
-def dry_run(config: dict[str, Any], train_path: str, eval_path: str | None = None) -> None:
+def dry_run(config: AppConfig, train_path: str, eval_path: str | None = None) -> None:
     """Validate data/config and print a formatted SFT preview without importing ML stacks."""
 
-    train_examples = load_examples(train_path)
-    eval_examples = load_examples(eval_path) if eval_path else []
-    rows = examples_to_sft_rows(train_examples)
+    train_count = 0
+    first_train_id: str | None = None
+    first_text_preview = ""
+    for example in iter_examples(train_path):
+        train_count += 1
+        if first_train_id is None:
+            first_train_id = example.id
+            formatted = build_sft_text(example)
+            first_text_preview = (
+                formatted
+                if len(formatted) <= 1_000
+                else f"{formatted[:700]}\n...\n{formatted[-300:]}"
+            )
+    eval_count = sum(1 for _ in iter_examples(eval_path)) if eval_path else 0
     print(
         json.dumps(
             {
-                "model": config.get("model", {}).get("name"),
-                "train_examples": len(train_examples),
-                "eval_examples": len(eval_examples),
-                "first_train_id": rows[0]["id"] if rows else None,
-                "first_text_preview": rows[0]["text"][:700] if rows else "",
+                "model": config.model.name,
+                "train_examples": train_count,
+                "eval_examples": eval_count,
+                "first_train_id": first_train_id,
+                "first_text_preview": first_text_preview,
             },
             indent=2,
         )
@@ -185,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             train(config, args.train, args.eval)
         return 0
-    except (DatasetError, RuntimeError, ValueError, KeyError) as exc:
+    except (ConfigError, DatasetError, RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
