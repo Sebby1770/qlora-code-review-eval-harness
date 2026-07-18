@@ -8,6 +8,7 @@ import string
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from heapq import heappush, heapreplace
 
 from review_tuner.schema import SEVERITY_ORDER, Prediction, ReviewExample
 
@@ -143,9 +144,10 @@ class ExampleScore:
     tag_f1: float
     composite: float
 
-    def as_dict(self) -> dict[str, float | str]:
+    def metrics(self) -> dict[str, float]:
+        """Return metric values without the example identifier."""
+
         return {
-            "id": self.id,
             "exact_match": self.exact_match,
             "token_f1": self.token_f1,
             "must_mention_recall": self.must_mention_recall,
@@ -154,6 +156,22 @@ class ExampleScore:
             "tag_f1": self.tag_f1,
             "composite": self.composite,
         }
+
+    def values(self) -> tuple[float, ...]:
+        """Return metric values in the canonical aggregation order."""
+
+        return (
+            self.exact_match,
+            self.token_f1,
+            self.must_mention_recall,
+            self.forbidden_rate,
+            self.severity_accuracy,
+            self.tag_f1,
+            self.composite,
+        )
+
+    def as_dict(self) -> dict[str, float | str]:
+        return {"id": self.id, **self.metrics()}
 
 
 _SCORE_FIELDS = (
@@ -197,16 +215,9 @@ class ScoreAccumulator:
         return self._statistics["composite"].count
 
     def add(self, score: ExampleScore) -> None:
-        values = (
-            score.exact_match,
-            score.token_f1,
-            score.must_mention_recall,
-            score.forbidden_rate,
-            score.severity_accuracy,
-            score.tag_f1,
-            score.composite,
-        )
-        for statistic, value in zip(self._statistics.values(), values, strict=True):
+        for statistic, value in zip(
+            self._statistics.values(), score.values(), strict=True
+        ):
             statistic.add(value)
 
     def report(self) -> dict[str, float | int]:
@@ -220,6 +231,138 @@ class ScoreAccumulator:
             float(report["composite"]) * 10000
         ) / 100
         return report
+
+
+_OUTCOME_TOLERANCE = 1e-12
+
+
+@dataclass(frozen=True)
+class ScoreComparison:
+    """Paired candidate and baseline scores for one golden example."""
+
+    candidate: ExampleScore
+    baseline: ExampleScore
+
+    def __post_init__(self) -> None:
+        if self.candidate.id != self.baseline.id:
+            raise ValueError("candidate and baseline score ids must match")
+
+    @property
+    def deltas(self) -> tuple[float, ...]:
+        """Return candidate-minus-baseline deltas in canonical metric order."""
+
+        return tuple(
+            candidate - baseline
+            for candidate, baseline in zip(
+                self.candidate.values(), self.baseline.values(), strict=True
+            )
+        )
+
+    @property
+    def outcome(self) -> str:
+        """Classify the paired result using the composite metric."""
+
+        delta = self.candidate.composite - self.baseline.composite
+        if math.isclose(delta, 0.0, abs_tol=_OUTCOME_TOLERANCE):
+            return "tie"
+        return "win" if delta > 0.0 else "loss"
+
+    def as_dict(self) -> dict[str, object]:
+        """Serialize without changing the existing top-level candidate fields."""
+
+        record: dict[str, object] = dict(self.candidate.as_dict())
+        record["baseline"] = self.baseline.metrics()
+        record["delta"] = dict(zip(_SCORE_FIELDS, self.deltas, strict=True))
+        record["outcome"] = self.outcome
+        return record
+
+
+class ScoreComparisonAccumulator:
+    """Aggregate paired scores and retain only the largest bounded regressions."""
+
+    def __init__(self, *, top_regressions: int = 10) -> None:
+        if top_regressions < 0:
+            raise ValueError("top_regressions must be non-negative")
+        self._candidate = ScoreAccumulator()
+        self._baseline = ScoreAccumulator()
+        self._deltas = {name: _RunningStatistic() for name in _SCORE_FIELDS}
+        self._wins = 0
+        self._ties = 0
+        self._losses = 0
+        self._top_regressions = top_regressions
+        self._regressions: list[tuple[float, str, float, float]] = []
+
+    @property
+    def count(self) -> int:
+        return self._candidate.count
+
+    def add(self, comparison: ScoreComparison) -> None:
+        self._candidate.add(comparison.candidate)
+        self._baseline.add(comparison.baseline)
+        for statistic, delta in zip(
+            self._deltas.values(), comparison.deltas, strict=True
+        ):
+            statistic.add(delta)
+
+        if comparison.outcome == "win":
+            self._wins += 1
+        elif comparison.outcome == "tie":
+            self._ties += 1
+        else:
+            self._losses += 1
+            self._retain_regression(comparison)
+
+    def _retain_regression(self, comparison: ScoreComparison) -> None:
+        if self._top_regressions == 0:
+            return
+        item = (
+            comparison.baseline.composite - comparison.candidate.composite,
+            comparison.candidate.id,
+            comparison.candidate.composite,
+            comparison.baseline.composite,
+        )
+        if len(self._regressions) < self._top_regressions:
+            heappush(self._regressions, item)
+        elif item > self._regressions[0]:
+            heapreplace(self._regressions, item)
+
+    def report(self) -> dict[str, object]:
+        """Return candidate, baseline, paired deltas, outcomes, and regressions."""
+
+        count = self.count
+        delta_report: dict[str, float | int] = {"count": count}
+        for name, statistic in self._deltas.items():
+            delta_report[name] = statistic.mean
+            delta_report[f"{name}_std"] = statistic.population_stddev
+        delta_report["composite_percent_points"] = (
+            float(delta_report["composite"]) * 100.0 if count else 0.0
+        )
+
+        outcomes: dict[str, float | int] = {
+            "candidate_wins": self._wins,
+            "ties": self._ties,
+            "candidate_losses": self._losses,
+            "win_rate": self._wins / count if count else 0.0,
+            "non_regression_rate": (self._wins + self._ties) / count if count else 0.0,
+        }
+        regressions = [
+            {
+                "id": example_id,
+                "candidate_composite": candidate,
+                "baseline_composite": baseline,
+                "composite_delta": candidate - baseline,
+            }
+            for _, example_id, candidate, baseline in sorted(
+                self._regressions, reverse=True
+            )
+        ]
+        return {
+            "candidate": self._candidate.report(),
+            "baseline": self._baseline.report(),
+            "delta": delta_report,
+            "outcomes": outcomes,
+            "largest_regressions": regressions,
+        }
 
 
 def score_example(
@@ -245,12 +388,14 @@ def score_example(
     forbidden = (
         _phrase_rate(normalized_prediction, golden.avoid) if golden.avoid else 0.0
     )
-    predicted_severity = prediction.severity or _infer_severity_from_normalized(
-        prediction.prediction,
-        normalized_prediction,
+    severity_accuracy = float(
+        prediction.severity is not None and prediction.severity == golden.severity
     )
-    severity_accuracy = float(predicted_severity == golden.severity)
-    tags = f1_for_sets(prediction.tags, golden.tags)
+    tags = (
+        f1_for_sets(prediction.tags, golden.tags)
+        if prediction.tags is not None
+        else 0.0
+    )
     composite = (
         weights.token_f1 * lexical
         + weights.must_mention_recall * mention

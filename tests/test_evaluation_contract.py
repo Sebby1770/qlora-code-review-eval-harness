@@ -1,7 +1,12 @@
 import pytest
 
 from review_tuner.data import write_jsonl
-from review_tuner.evaluate import evaluate_predictions, main
+from review_tuner.evaluate import (
+    evaluate_comparisons,
+    evaluate_predictions,
+    heuristic_prediction,
+    main,
+)
 from review_tuner.schema import DatasetError, Prediction, ReviewExample
 
 
@@ -26,6 +31,33 @@ def prediction(prediction_id: str) -> Prediction:
 def test_evaluation_requires_exact_id_alignment() -> None:
     with pytest.raises(DatasetError, match="missing predictions.*unexpected predictions"):
         evaluate_predictions([example("golden")], [prediction("stale")])
+
+    with pytest.raises(
+        DatasetError, match="missing baseline predictions.*unexpected baseline predictions"
+    ):
+        evaluate_comparisons(
+            [example("golden")],
+            [prediction("golden")],
+            [prediction("stale")],
+        )
+
+
+def test_heuristic_baseline_derives_severity_without_gold_label_leakage() -> None:
+    high_gold = example("one")
+    low_gold = ReviewExample(
+        id=high_gold.id,
+        diff=high_gold.diff,
+        file_path=high_gold.file_path,
+        language=high_gold.language,
+        context=high_gold.context,
+        target_comment=high_gold.target_comment,
+        severity="low",
+        tags=high_gold.tags,
+        must_mention=high_gold.must_mention,
+        avoid=high_gold.avoid,
+    )
+
+    assert heuristic_prediction(high_gold).severity == heuristic_prediction(low_gold).severity
 
 
 def test_evaluation_rejects_duplicate_and_empty_golden_sets() -> None:

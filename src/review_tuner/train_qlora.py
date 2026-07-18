@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Iterator
+from typing import Any
 
 from review_tuner.config import AppConfig, ConfigError, load_config
 from review_tuner.data import iter_examples
@@ -15,12 +16,67 @@ from review_tuner.modeling import (
     missing_ml_dependency_error,
     torch_dtype,
 )
-from review_tuner.prompts import build_sft_text, iter_sft_rows
+from review_tuner.prompts import build_budgeted_sft_text, build_sft_text
 from review_tuner.schema import DatasetError
 
 
-def _dataset_rows(path: str) -> Iterator[dict[str, str]]:
-    yield from iter_sft_rows(iter_examples(path))
+class TrainingDataError(DatasetError):
+    """Raised when a validated training row cannot be formatted for SFT."""
+
+
+def _dataset_rows(
+    path: str, tokenizer: Any, max_length: int
+) -> Iterator[dict[str, str]]:
+    examples = iter_examples(path)
+    while True:
+        try:
+            example = next(examples)
+        except StopIteration:
+            return
+        except DatasetError as exc:
+            raise TrainingDataError(str(exc)) from exc
+
+        try:
+            text = build_budgeted_sft_text(
+                example,
+                tokenizer=tokenizer,
+                max_length=max_length,
+            )
+        except ValueError as exc:
+            raise TrainingDataError(
+                f"{path}: example {example.id!r} cannot fit the configured "
+                f"training.max_length: {exc}"
+            ) from exc
+        yield {
+            "id": example.id,
+            "text": text,
+        }
+
+
+def _dataset_from_generator(
+    dataset_type: Any,
+    *,
+    path: str,
+    tokenizer: Any,
+    max_length: int,
+    generation_error_type: type[Exception],
+) -> Any:
+    """Create a Dataset while preserving actionable row-formatting failures."""
+
+    try:
+        return dataset_type.from_generator(
+            _dataset_rows,
+            gen_kwargs={
+                "path": path,
+                "tokenizer": tokenizer,
+                "max_length": max_length,
+            },
+        )
+    except generation_error_type as exc:
+        cause = exc.__cause__
+        if isinstance(cause, TrainingDataError):
+            raise cause from exc
+        raise
 
 
 def train(config: AppConfig, train_path: str, eval_path: str | None = None) -> None:
@@ -29,6 +85,9 @@ def train(config: AppConfig, train_path: str, eval_path: str | None = None) -> N
     try:
         import torch  # type: ignore[import-not-found]
         from datasets import Dataset  # type: ignore[import-not-found]
+        from datasets.exceptions import (  # type: ignore[import-not-found]
+            DatasetGenerationError,
+        )
         from peft import (  # type: ignore[import-not-found]
             LoraConfig,
             prepare_model_for_kbit_training,
@@ -46,13 +105,6 @@ def train(config: AppConfig, train_path: str, eval_path: str | None = None) -> N
     qlora_cfg = config.qlora
     train_cfg = config.training
 
-    train_dataset = Dataset.from_generator(_dataset_rows, gen_kwargs={"path": train_path})
-    eval_dataset = (
-        Dataset.from_generator(_dataset_rows, gen_kwargs={"path": eval_path})
-        if eval_path
-        else None
-    )
-
     compute_dtype = torch_dtype(torch, qlora_cfg.bnb_4bit_compute_dtype)
     quantization_config = make_quantization_config(
         qlora_cfg,
@@ -62,6 +114,25 @@ def train(config: AppConfig, train_path: str, eval_path: str | None = None) -> N
 
     tokenizer = ensure_padding_token(
         AutoTokenizer.from_pretrained(model_cfg.name, use_fast=True)
+    )
+
+    train_dataset = _dataset_from_generator(
+        Dataset,
+        path=train_path,
+        tokenizer=tokenizer,
+        max_length=train_cfg.max_length,
+        generation_error_type=DatasetGenerationError,
+    )
+    eval_dataset = (
+        _dataset_from_generator(
+            Dataset,
+            path=eval_path,
+            tokenizer=tokenizer,
+            max_length=train_cfg.max_length,
+            generation_error_type=DatasetGenerationError,
+        )
+        if eval_path
+        else None
     )
 
     model_kwargs = {"torch_dtype": compute_dtype}
@@ -145,7 +216,12 @@ def dry_run(config: AppConfig, train_path: str, eval_path: str | None = None) ->
         train_count += 1
         if first_train_id is None:
             first_train_id = example.id
-            first_text_preview = build_sft_text(example)[:700]
+            formatted = build_sft_text(example)
+            first_text_preview = (
+                formatted
+                if len(formatted) <= 1_000
+                else f"{formatted[:700]}\n...\n{formatted[-300:]}"
+            )
     eval_count = sum(1 for _ in iter_examples(eval_path)) if eval_path else 0
     print(
         json.dumps(

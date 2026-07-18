@@ -110,7 +110,7 @@ class Prediction:
     id: str
     prediction: str
     severity: str | None = None
-    tags: tuple[str, ...] = field(default_factory=tuple)
+    tags: tuple[str, ...] | None = None
 
     def to_record(self) -> dict[str, object]:
         """Serialize the prediction with optional fields omitted when unset."""
@@ -121,7 +121,7 @@ class Prediction:
         }
         if self.severity is not None:
             record["severity"] = self.severity
-        if self.tags:
+        if self.tags is not None:
             record["tags"] = list(self.tags)
         return record
 
@@ -145,5 +145,9 @@ class Prediction:
             id=prediction_id,
             prediction=prediction,
             severity=severity,
-            tags=_string_list(raw.get("tags"), "tags", prefix),
+            tags=(
+                None
+                if raw.get("tags") is None
+                else _string_list(raw["tags"], "tags", prefix)
+            ),
         )

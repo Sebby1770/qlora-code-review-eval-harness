@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -18,8 +19,8 @@ from review_tuner.modeling import (
     missing_ml_dependency_error,
     torch_dtype,
 )
-from review_tuner.prompts import build_prompt
-from review_tuner.schema import DatasetError, ReviewExample
+from review_tuner.prompts import build_budgeted_prompt as build_budgeted_prompt
+from review_tuner.schema import DatasetError, Prediction, ReviewExample
 
 T = TypeVar("T")
 
@@ -53,6 +54,62 @@ def batched(items: Iterable[T], size: int) -> Iterator[list[T]]:
         yield batch
 
 
+def _strip_json_fence(text: str) -> str:
+    lines = text.strip().splitlines()
+    if (
+        len(lines) >= 3
+        and lines[0].strip().lower() in {"```", "```json"}
+        and lines[-1].strip() == "```"
+    ):
+        return "\n".join(lines[1:-1]).strip()
+    return text.strip()
+
+
+def parse_prediction_output(
+    example_id: str,
+    generated: str,
+    *,
+    allow_unstructured: bool = False,
+) -> Prediction:
+    """Parse one generated JSON prediction, with an explicit legacy fallback."""
+
+    stripped = generated.strip()
+    if not stripped:
+        raise DatasetError(f"model returned an empty prediction for id {example_id!r}")
+
+    try:
+        value = json.loads(_strip_json_fence(stripped))
+    except json.JSONDecodeError as exc:
+        if allow_unstructured:
+            return Prediction(id=example_id, prediction=stripped)
+        raise DatasetError(
+            f"invalid structured model output for id {example_id!r}: {exc}; "
+            "retrain with the current prompt contract or pass --allow-unstructured-output"
+        ) from exc
+
+    try:
+        if not isinstance(value, dict):
+            raise DatasetError("prediction output must be a JSON object")
+        expected_fields = {"prediction", "severity", "tags"}
+        missing = sorted(expected_fields - set(value))
+        unexpected = sorted(set(value) - expected_fields)
+        if missing:
+            raise DatasetError(f"prediction output is missing fields: {', '.join(missing)}")
+        if unexpected:
+            raise DatasetError(
+                f"prediction output has unexpected fields: {', '.join(unexpected)}"
+            )
+        if not isinstance(value["severity"], str):
+            raise DatasetError("prediction output severity must be a string")
+        if not isinstance(value["tags"], list):
+            raise DatasetError("prediction output tags must be an array of strings")
+        return Prediction.from_dict({"id": example_id, **value})
+    except DatasetError as exc:
+        raise DatasetError(
+            f"invalid structured model output for id {example_id!r}: {exc}"
+        ) from exc
+
+
 def iter_prediction_rows(
     examples: Iterable[ReviewExample],
     *,
@@ -60,19 +117,31 @@ def iter_prediction_rows(
     model: Any,
     torch_module: Any,
     limits: InferenceLimits,
-) -> Iterator[dict[str, str]]:
+    allow_unstructured_output: bool = False,
+) -> Iterator[dict[str, object]]:
     """Generate ordered prediction rows using an already-loaded model runtime."""
 
     for example_batch in batched(examples, limits.batch_size):
-        prompts = [build_prompt(example) for example in example_batch]
+        prompts = [
+            build_budgeted_prompt(
+                example,
+                tokenizer=tokenizer,
+                max_input_tokens=limits.max_input_tokens,
+            )
+            for example in example_batch
+        ]
         encoded = tokenizer(
             prompts,
             return_tensors="pt",
             padding=True,
-            truncation=True,
-            max_length=limits.max_input_tokens,
+            truncation=False,
         ).to(model.device)
         input_width = encoded["input_ids"].shape[-1]
+        if input_width > limits.max_input_tokens:
+            raise RuntimeError(
+                "tokenizer produced an input wider than the validated prompt budget: "
+                f"{input_width} > {limits.max_input_tokens}"
+            )
         with torch_module.inference_mode():
             output = model.generate(
                 **encoded,
@@ -84,7 +153,12 @@ def iter_prediction_rows(
             generated = tokenizer.decode(
                 tokens[input_width:], skip_special_tokens=True
             ).strip()
-            yield {"id": example.id, "prediction": generated}
+            prediction = parse_prediction_output(
+                example.id,
+                generated,
+                allow_unstructured=allow_unstructured_output,
+            )
+            yield prediction.to_record()
 
 
 def generate_predictions(
@@ -97,6 +171,7 @@ def generate_predictions(
     max_input_tokens: int = 1024,
     batch_size: int = 1,
     load_in_4bit: bool = True,
+    allow_unstructured_output: bool = False,
 ) -> None:
     """Run model inference over a golden JSONL file and write predictions."""
 
@@ -149,6 +224,7 @@ def generate_predictions(
             model=model,
             torch_module=torch,
             limits=limits,
+            allow_unstructured_output=allow_unstructured_output,
         ),
     )
 
@@ -171,6 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable 4-bit loading for inference.",
     )
+    parser.add_argument(
+        "--allow-unstructured-output",
+        action="store_true",
+        help=(
+            "Accept legacy plain-text model output without severity or tags. "
+            "Those metrics will score as unavailable."
+        ),
+    )
     return parser
 
 
@@ -186,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             max_input_tokens=args.max_input_tokens,
             batch_size=args.batch_size,
             load_in_4bit=not args.no_4bit,
+            allow_unstructured_output=args.allow_unstructured_output,
         )
         print(f"wrote predictions to {Path(args.out)}")
         return 0

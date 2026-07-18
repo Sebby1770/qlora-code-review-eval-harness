@@ -36,7 +36,7 @@ def test_schema_normalizes_and_deduplicates_list_fields() -> None:
     )
 
     assert example.tags == ("security", "tests")
-    assert prediction.tags == ()
+    assert prediction.tags is None
 
 
 def test_prediction_serialization_omits_unset_optional_fields() -> None:
@@ -54,6 +54,17 @@ def test_prediction_serialization_omits_unset_optional_fields() -> None:
         "prediction": "Needs tests.",
         "severity": "medium",
         "tags": ["tests"],
+    }
+    assert Prediction(
+        id="one",
+        prediction="No issue categories apply.",
+        severity="low",
+        tags=(),
+    ).to_record() == {
+        "id": "one",
+        "prediction": "No issue categories apply.",
+        "severity": "low",
+        "tags": [],
     }
 
 
