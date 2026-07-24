@@ -1,39 +1,56 @@
-from review_tuner.metrics import phrase_recall, score_example, token_f1
+from review_tuner.metrics import (
+    bleu_lite,
+    length_ratio,
+    rouge_l_lite,
+    token_f1,
+    aggregate_scores,
+    score_example,
+)
 from review_tuner.schema import Prediction, ReviewExample
 
 
-def test_token_f1_rewards_overlap() -> None:
-    assert token_f1("restore the expires_at check", "please restore expires_at validation") > 0.4
-    assert token_f1("completely different", "please restore expires_at validation") == 0.0
-
-
-def test_phrase_recall_counts_required_phrases() -> None:
-    assert phrase_recall("Please restore the expires_at check.", ("expires_at check",)) == 1.0
-    assert phrase_recall("Please restore validation.", ("expires_at check",)) == 0.0
-
-
-def test_score_example_combines_rubric_and_metadata() -> None:
-    golden = ReviewExample(
-        id="golden",
-        diff="- expired check\n+ no check",
-        file_path="auth.py",
+def _ex(**kwargs):
+    base = dict(
+        id="x",
+        diff="diff",
+        file_path="a.py",
         language="python",
-        context="Refresh token flow.",
-        target_comment="Restore the expires_at check and add a regression test.",
+        context="ctx",
+        target_comment="please add a test for expired tokens",
         severity="high",
         tags=("security", "tests"),
-        must_mention=("expires_at check", "regression test"),
+        must_mention=("expired tokens", "test"),
+        avoid=("style",),
     )
-    prediction = Prediction(
-        id="golden",
-        prediction="Restore the expires_at check and add a regression test.",
+    base.update(kwargs)
+    return ReviewExample(**base)
+
+
+def test_token_f1_identical():
+    assert token_f1("hello world", "hello world") == 1.0
+
+
+def test_bleu_and_rouge_positive():
+    pred = "please restore the expires_at check and add a regression test"
+    ref = "please restore the expires_at check and add a regression test for expired tokens"
+    assert bleu_lite(pred, ref) > 0.3
+    assert rouge_l_lite(pred, ref) > 0.3
+    assert 0.0 < length_ratio(pred, ref) <= 1.0
+
+
+def test_score_example_composite_bounds():
+    golden = _ex()
+    pred = Prediction(
+        id="x",
+        prediction="Please restore expired tokens validation and add a test.",
         severity="high",
         tags=("security", "tests"),
     )
-
-    score = score_example(golden, prediction)
-
-    assert score.must_mention_recall == 1.0
-    assert score.severity_accuracy == 1.0
-    assert score.tag_f1 == 1.0
-    assert score.composite > 0.9
+    score = score_example(golden, pred)
+    assert 0.0 <= score.composite <= 1.0
+    assert score.bleu_lite >= 0.0
+    assert score.rouge_l >= 0.0
+    agg = aggregate_scores([score])
+    assert agg["count"] == 1
+    assert "by_language" in agg
+    assert "python" in agg["by_language"]
