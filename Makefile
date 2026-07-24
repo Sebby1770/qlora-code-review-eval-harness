@@ -10,11 +10,12 @@ test:
 	pytest -q
 
 smoke-eval:
-	PYTHONPATH=src python -m review_tuner.evaluate \
-		--golden data/golden/code_review_golden.jsonl \
-		--predictions examples/predictions.sample.jsonl \
-		--out reports/smoke_eval.json \
-		--per-example-out reports/smoke_eval_examples.jsonl
+	PYTHONPATH=src python -m review_tuner.evaluate eval \
+	--golden data/golden/code_review_golden.jsonl \
+	--predictions examples/predictions.sample.jsonl \
+	--out reports/smoke_eval.json \
+	--per-example-out reports/smoke_eval_examples.jsonl \
+	--report-md reports/smoke_eval.md
 
 train-dry-run:
 	PYTHONPATH=src python -m review_tuner.train_qlora \

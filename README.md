@@ -1,5 +1,8 @@
 # QLoRA Code Review Comment Tuner
 
+**Version 0.2.0**
+
+
 Fine-tune a compact causal LLM to write code review comments, then score it with a
 repeatable golden-set harness. The repo is intentionally split into two paths:
 
@@ -39,6 +42,25 @@ Training rows use `review_comment`; golden rows use `expected_comment`.
   }
 }
 ```
+
+
+## Evaluation commands (0.2)
+
+```bash
+# Score (baseline if --predictions omitted)
+review-eval eval --golden data/golden/code_review_golden.jsonl --report-md reports/eval.md
+
+# Deterministic baseline predictions
+review-eval baseline --golden data/golden/code_review_golden.jsonl --out predictions.jsonl
+
+# Compare two prediction files
+review-eval compare --golden data/golden/code_review_golden.jsonl pred_a.jsonl pred_b.jsonl
+
+# Validate dataset schema
+review-eval validate data/golden/code_review_golden.jsonl
+```
+
+Filters: `--language python --severity high --tag security`
 
 ## Quickstart
 
