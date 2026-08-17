@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "review-tuner"
-version = "0.2.0"
+version = "0.3.0"
 description = "QLoRA fine-tuning and golden-set evaluation harness for code review comment generation."
 readme = "README.md"
 requires-python = ">=3.10"

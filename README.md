@@ -1,6 +1,6 @@
 # QLoRA Code Review Comment Tuner
 
-**Version 0.2.0**
+**Version 0.3.0**
 
 
 Fine-tune a compact causal LLM to write code review comments, then score it with a
@@ -18,8 +18,13 @@ The default config uses Mistral 7B with 4-bit NF4 QLoRA. You can swap
 - Prompt formatter that turns diffs, context, severity, and tags into SFT rows.
 - Golden dataset format with rubric phrases, forbidden phrases, severity, and tags.
 - Automated evaluation harness with lexical F1, rubric phrase recall, forbidden phrase
-  rate, severity accuracy, tag F1, and a composite score.
-- Deterministic baseline predictions for smoke tests.
+  rate, severity accuracy, tag F1, BLEU-lite, ROUGE-L-lite, and a composite score.
+- Bootstrap 95% CI on the composite score, plus error analysis of missed phrases and
+  severity confusion.
+- HTML and Markdown reports, plus a static dashboard over a reports directory.
+- Dataset linter for golden/train JSONL.
+- Deterministic baseline predictions (includes deleted-line identifiers).
+- 15 golden examples covering security, performance, correctness, and test hygiene.
 - CI workflow that lints, tests, and runs a smoke evaluation.
 
 ## Dataset Format
@@ -44,11 +49,14 @@ Training rows use `review_comment`; golden rows use `expected_comment`.
 ```
 
 
-## Evaluation commands (0.2)
+## Evaluation commands (0.3)
 
 ```bash
 # Score (baseline if --predictions omitted)
-review-eval eval --golden data/golden/code_review_golden.jsonl --report-md reports/eval.md
+review-eval eval --golden data/golden/code_review_golden.jsonl \
+  --report-md reports/eval.md \
+  --report-html reports/eval.html \
+  --report-json reports/eval.json
 
 # Deterministic baseline predictions
 review-eval baseline --golden data/golden/code_review_golden.jsonl --out predictions.jsonl
@@ -58,6 +66,12 @@ review-eval compare --golden data/golden/code_review_golden.jsonl pred_a.jsonl p
 
 # Validate dataset schema
 review-eval validate data/golden/code_review_golden.jsonl
+
+# Lint golden/train JSONL (exit 1 on errors; warnings are non-fatal)
+review-eval lint data/golden/code_review_golden.jsonl
+
+# Static dashboard from the latest reports/*.json and reports/*.md
+review-eval dashboard reports/
 ```
 
 Filters: `--language python --severity high --tag security`
@@ -76,6 +90,9 @@ The smoke evaluation writes:
 
 - `reports/smoke_eval.json`
 - `reports/smoke_eval_examples.jsonl`
+- `reports/smoke_eval.md`
+- `reports/smoke_eval.html`
+- `reports/index.html`
 
 ## Train With QLoRA
 
@@ -132,6 +149,7 @@ PYTHONPATH=src python -m review_tuner.evaluate \
   --predictions reports/predictions.jsonl \
   --out reports/eval.json \
   --per-example-out reports/eval_examples.jsonl \
+  --report-html reports/eval.html \
   --fail-under 0.70
 ```
 
@@ -146,7 +164,11 @@ Exact string match is too brittle for review comments, so the harness combines:
 - rubric phrase recall for issue-specific must-haves,
 - forbidden phrase rate to catch unwanted style-only comments,
 - severity classification accuracy,
-- tag F1 for issue category alignment.
+- tag F1 for issue category alignment,
+- a bootstrap confidence interval on the composite mean.
+
+Error analysis lists the most-missed rubric phrases, forbidden-phrase hits, and
+predicted-vs-gold severity pairs so a low composite is diagnosable.
 
 This gives you a stable gate for regression testing while still allowing natural
 language variation.
