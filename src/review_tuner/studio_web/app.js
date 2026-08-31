@@ -58,19 +58,65 @@
     if (known === "run" && state.lastView) renderRun(state.lastView);
   }
 
+  let useClientEngine = /github\.io$/.test(location.hostname);
+
   async function api(path, options) {
-    const response = await fetch(path, options);
-    const text = await response.text();
-    let data;
+    if (useClientEngine && window.ReviewEval) {
+      const result = await window.ReviewEval.handle(path, options || { method: "GET" });
+      if (result instanceof Blob) throw new Error("unexpected binary response");
+      return result;
+    }
     try {
-      data = text ? JSON.parse(text) : {};
+      const response = await fetch(path, options);
+      const text = await response.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (err) {
+        throw new Error("Studio returned a non-JSON response");
+      }
+      if (!response.ok) {
+        if (window.ReviewEval && (response.status === 404 || response.status === 405)) {
+          useClientEngine = true;
+          return api(path, options);
+        }
+        throw new Error(data.error || `Request failed (${response.status})`);
+      }
+      return data;
     } catch (err) {
-      throw new Error("Studio returned a non-JSON response");
+      if (window.ReviewEval && !useClientEngine && !String(err.message).startsWith("Studio")) {
+        useClientEngine = true;
+        return api(path, options);
+      }
+      throw err;
     }
-    if (!response.ok) {
-      throw new Error(data.error || `Request failed (${response.status})`);
+  }
+
+  async function downloadPost(path, filename, payload) {
+    let blob;
+    if (useClientEngine && window.ReviewEval) {
+      blob = await window.ReviewEval.handle(path, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error("Could not build the download.");
+      blob = await response.blob();
     }
-    return data;
+    if (!(blob instanceof Blob)) {
+      blob = new Blob([typeof blob === "string" ? blob : JSON.stringify(blob)], { type: "application/octet-stream" });
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function readFile(input) {
@@ -717,7 +763,9 @@
   async function initHealth() {
     try {
       const health = await api("/api/health");
-      $("health-pill").textContent = `v${health.version} · local · no GPU`;
+      $("health-pill").textContent = health.static
+        ? `v${health.version} · GitHub Pages · no GPU`
+        : `v${health.version} · local · no GPU`;
     } catch (err) {
       $("health-pill").textContent = "Studio API unreachable";
     }
@@ -827,19 +875,7 @@
   $("download-badge")?.addEventListener("click", async () => {
     if (!state.lastPayload) return toast("Grade a run first.", "error");
     try {
-      const response = await fetch("/api/badge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state.lastPayload),
-      });
-      if (!response.ok) throw new Error("Could not build the badge.");
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "review-tuner-badge.svg";
-      link.click();
-      URL.revokeObjectURL(url);
+      await downloadPost("/api/badge", "review-tuner-badge.svg", state.lastPayload);
     } catch (err) {
       toast(err.message, "error");
     }
@@ -867,19 +903,7 @@
   $("download-html")?.addEventListener("click", async () => {
     if (!state.lastPayload) return toast("Grade a run first.", "error");
     try {
-      const response = await fetch("/api/report-html", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state.lastPayload),
-      });
-      if (!response.ok) throw new Error("Could not build the HTML report.");
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "review-tuner-report.html";
-      link.click();
-      URL.revokeObjectURL(url);
+      await downloadPost("/api/report-html", "review-tuner-report.html", state.lastPayload);
     } catch (err) {
       toast(err.message, "error");
     }

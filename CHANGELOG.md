@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0] — 2026-08-31
+
+### Added
+- GitHub Pages studio at https://sebby1770.github.io/qlora-code-review-eval-harness/ (client-side scorer, sample/baseline, HTML/badge download).
+- Static eval engine fills tag averages and compare newly-caught / newly-missed flips.
+
 ## [0.6.1] — 2026-08-31
 
 ### Changed

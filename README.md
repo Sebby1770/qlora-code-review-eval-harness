@@ -1,10 +1,12 @@
 # Review Tuner Studio
 
-**Version 0.6.1** · [github.com/Sebby1770/qlora-code-review-eval-harness](https://github.com/Sebby1770/qlora-code-review-eval-harness)
+**Version 0.7.0** · [github.com/Sebby1770/qlora-code-review-eval-harness](https://github.com/Sebby1770/qlora-code-review-eval-harness)
+
+**Live site:** [https://sebby1770.github.io/qlora-code-review-eval-harness/](https://sebby1770.github.io/qlora-code-review-eval-harness/)
 
 Grade a code-review bot the way you would grade a teammate.
 
-This repo still trains a compact causal LLM with QLoRA and scores it against a labelled golden set. The **local studio** is the default path: no GPU, no npm, no account. Click **Try the sample**, read a letter grade, and inspect the worst example — diff, expected comment, bot comment, and the phrases it skipped.
+This repo still trains a compact causal LLM with QLoRA and scores it against a labelled golden set. The **studio** is the default path: no GPU, no npm, no account. The GitHub Pages copy scores in the browser. Click **Try the sample**, read a letter grade, and inspect the worst example — diff, expected comment, bot comment, and the phrases it skipped.
 
 ```bash
 git clone https://github.com/Sebby1770/qlora-code-review-eval-harness.git
@@ -15,7 +17,7 @@ python -m pip install -e ".[dev]"
 review-eval studio --open
 ```
 
-Then open [http://127.0.0.1:8765/](http://127.0.0.1:8765/). Diffs stay on your machine.
+Then open [http://127.0.0.1:8765/](http://127.0.0.1:8765/). Diffs stay on your machine. Or skip the install and use the [live studio](https://sebby1770.github.io/qlora-code-review-eval-harness/).
 
 ## Two audiences, one harness
 

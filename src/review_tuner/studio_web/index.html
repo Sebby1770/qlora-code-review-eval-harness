@@ -6,7 +6,12 @@
   <meta name="color-scheme" content="dark"/>
   <title>Review Tuner Studio</title>
   <meta name="description" content="Grade a code-review bot the way you would grade a teammate. Local, no GPU required."/>
-  <link rel="stylesheet" href="/styles.css"/>
+  <meta name="theme-color" content="#121417"/>
+  <meta property="og:title" content="Review Tuner Studio"/>
+  <meta property="og:description" content="Grade a code-review bot in your browser. No GPU. Nothing is uploaded."/>
+  <meta property="og:url" content="https://sebby1770.github.io/qlora-code-review-eval-harness/"/>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23121417'/%3E%3Cpath d='M8 12h16M8 16.5h11M8 21h8' stroke='%23e3b23c' stroke-width='2' fill='none'/%3E%3C/svg%3E"/>
+  <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -51,11 +56,12 @@
 
   <main id="main">
     <section id="view-home" class="view" data-view="home">
-      <p class="kicker">A review desk, not an ML console</p>
+      <p class="kicker">Live on GitHub Pages · a review desk, not an ML console</p>
       <h1>Grade a code-review bot the way you would grade a teammate.</h1>
       <p class="lede">
         Give it diffs and the comments it wrote. Studio tells you, in English, what it caught,
-        what it skipped, and whether you would ship it. Nothing leaves this machine.
+        what it skipped, and whether you would ship it. This GitHub Pages copy scores in the tab.
+        Nothing is uploaded.
       </p>
       <div class="doors">
         <button class="door" data-action="sample" type="button">
@@ -295,11 +301,13 @@
   </main>
 
   <footer class="foot">
-    <p>Review Tuner Studio runs on your computer. Diffs are scored in-process and are not uploaded.</p>
+    <p>Review Tuner Studio scores in this tab. Diffs are not uploaded. The Python CLI is optional.</p>
     <p><a href="#/how">How scoring works</a> · <code>review-eval studio</code> ·
-      <a href="https://github.com/Sebby1770/qlora-code-review-eval-harness">GitHub</a></p>
+      <a href="https://github.com/Sebby1770/qlora-code-review-eval-harness">GitHub</a> ·
+      <a href="https://sebby1770.github.io/qlora-code-review-eval-harness/">Live studio</a></p>
   </footer>
 
-  <script src="/app.js"></script>
+  <script src="eval-engine.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
