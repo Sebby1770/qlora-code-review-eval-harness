@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-VALID_SEVERITIES = {"blocker", "high", "medium", "low", "nit"}
+SEVERITY_ORDER = ("blocker", "high", "medium", "low", "nit")
+VALID_SEVERITIES = set(SEVERITY_ORDER)
 
 
 class DatasetError(ValueError):

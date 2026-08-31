@@ -1,4 +1,4 @@
-.PHONY: install-dev lint test smoke-eval train-dry-run
+.PHONY: install-dev lint test smoke-eval train-dry-run studio
 
 install-dev:
 	python -m pip install -e ".[dev]"
@@ -15,7 +15,13 @@ smoke-eval:
 	--predictions examples/predictions.sample.jsonl \
 	--out reports/smoke_eval.json \
 	--per-example-out reports/smoke_eval_examples.jsonl \
-	--report-md reports/smoke_eval.md
+	--report-md reports/smoke_eval.md \
+	--report-html reports/smoke_eval.html \
+	--report-json reports/smoke_eval.json
+	PYTHONPATH=src python -m review_tuner.evaluate dashboard reports/
+
+studio:
+	PYTHONPATH=src python -m review_tuner.evaluate studio --open
 
 train-dry-run:
 	PYTHONPATH=src python -m review_tuner.train_qlora \

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "review-tuner"
-version = "0.2.0"
-description = "QLoRA fine-tuning and golden-set evaluation harness for code review comment generation."
+version = "0.6.0"
+description = "QLoRA fine-tuning, golden-set evaluation, and a local studio for grading code-review comments."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -48,6 +48,9 @@ review-infer = "review_tuner.infer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+review_tuner = ["studio_web/*", "studio_web/samples/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

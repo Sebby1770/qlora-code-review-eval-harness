@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import html
 import math
+import random
 import re
 import statistics
 import string
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from review_tuner.schema import VALID_SEVERITIES, Prediction, ReviewExample
+from review_tuner.schema import SEVERITY_ORDER, Prediction, ReviewExample
 
 _PUNCT_TRANSLATION = str.maketrans({char: " " for char in string.punctuation})
 
@@ -153,16 +156,77 @@ def f1_for_sets(predicted: tuple[str, ...], expected: tuple[str, ...]) -> float:
 
 
 def infer_severity(text: str) -> str | None:
-    """Infer severity from structured or prose predictions."""
+    """Infer severity from structured or prose predictions.
 
+    Labels are checked in ``SEVERITY_ORDER`` so a comment that mentions more
+    than one severity is not resolved by set iteration order.
+    """
+
+    lowered = text.lower()
     normalized = normalize_text(text)
     match = re.search(r"\bseverity\s+(blocker|high|medium|low|nit)\b", normalized)
     if match:
         return match.group(1)
-    for severity in VALID_SEVERITIES:
-        if f"[{severity}]" in text.lower() or f"{severity} severity" in normalized:
+    for severity in SEVERITY_ORDER:
+        if f"[{severity}]" in lowered or f"{severity} severity" in normalized:
             return severity
     return None
+
+
+def missed_must_mention(prediction: str, required_phrases: tuple[str, ...]) -> tuple[str, ...]:
+    """Return rubric phrases that do not appear in the prediction."""
+
+    normalized = normalize_text(prediction)
+    return tuple(
+        phrase for phrase in required_phrases if normalize_text(phrase) not in normalized
+    )
+
+
+def forbidden_hits(prediction: str, forbidden_phrases: tuple[str, ...]) -> tuple[str, ...]:
+    """Return forbidden phrases that appear in the prediction."""
+
+    normalized = normalize_text(prediction)
+    return tuple(phrase for phrase in forbidden_phrases if normalize_text(phrase) in normalized)
+
+
+def _percentile(sorted_values: Sequence[float], percent: float) -> float:
+    """Linear-interpolation percentile for a sorted non-empty sequence."""
+
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = (percent / 100.0) * (len(sorted_values) - 1)
+    low_index = int(math.floor(rank))
+    high_index = int(math.ceil(rank))
+    low = float(sorted_values[low_index])
+    if low_index == high_index:
+        return low
+    high = float(sorted_values[high_index])
+    frac = rank - low_index
+    return low * (1.0 - frac) + high * frac
+
+
+def bootstrap_ci(
+    values: Sequence[float],
+    n: int = 500,
+    seed: int = 0,
+) -> tuple[float, float]:
+    """Return a deterministic 95% percentile bootstrap interval on the mean."""
+
+    if n < 1:
+        raise ValueError("n must be >= 1")
+    if not values:
+        return (0.0, 0.0)
+    data = [float(value) for value in values]
+    rng = random.Random(seed)
+    size = len(data)
+    means = []
+    for _ in range(n):
+        sample = [data[rng.randrange(size)] for _ in range(size)]
+        means.append(statistics.fmean(sample))
+    means.sort()
+    return (_percentile(means, 2.5), _percentile(means, 97.5))
 
 
 @dataclass(frozen=True)
@@ -182,12 +246,16 @@ class ExampleScore:
     composite: float
     language: str = ""
     severity: str = ""
+    predicted_severity: str = ""
+    missed_must_mention: tuple[str, ...] = ()
+    forbidden_hits: tuple[str, ...] = ()
 
-    def as_dict(self) -> dict[str, float | str]:
+    def as_dict(self) -> dict[str, float | str | list[str]]:
         return {
             "id": self.id,
             "language": self.language,
             "severity": self.severity,
+            "predicted_severity": self.predicted_severity,
             "exact_match": self.exact_match,
             "token_f1": self.token_f1,
             "bleu_lite": self.bleu_lite,
@@ -198,6 +266,8 @@ class ExampleScore:
             "severity_accuracy": self.severity_accuracy,
             "tag_f1": self.tag_f1,
             "composite": self.composite,
+            "missed_must_mention": list(self.missed_must_mention),
+            "forbidden_hits": list(self.forbidden_hits),
         }
 
 
@@ -211,6 +281,8 @@ def score_example(golden: ReviewExample, prediction: Prediction) -> ExampleScore
     ratio = length_ratio(prediction.prediction, golden.target_comment)
     mention = phrase_recall(prediction.prediction, golden.must_mention)
     forbidden = forbidden_rate(prediction.prediction, golden.avoid)
+    missed = missed_must_mention(prediction.prediction, golden.must_mention)
+    hits = forbidden_hits(prediction.prediction, golden.avoid)
     predicted_severity = prediction.severity or infer_severity(prediction.prediction)
     severity_accuracy = float(predicted_severity == golden.severity)
     tags = f1_for_sets(prediction.tags, golden.tags)
@@ -239,6 +311,9 @@ def score_example(golden: ReviewExample, prediction: Prediction) -> ExampleScore
         composite=composite,
         language=golden.language,
         severity=golden.severity,
+        predicted_severity=predicted_severity or "",
+        missed_must_mention=missed,
+        forbidden_hits=hits,
     )
 
 
@@ -265,6 +340,10 @@ def aggregate_scores(scores: list[ExampleScore]) -> dict[str, float | int | dict
         report[field_name] = statistics.fmean(values)
         report[f"{field_name}_std"] = statistics.pstdev(values) if len(values) > 1 else 0.0
     report["composite_percent"] = math.floor(float(report["composite"]) * 10000) / 100
+    ci_lo, ci_hi = bootstrap_ci([score.composite for score in scores])
+    report["composite_ci_lo"] = ci_lo
+    report["composite_ci_hi"] = ci_hi
+    report["composite_ci"] = [ci_lo, ci_hi]
 
     by_language: dict[str, list[float]] = defaultdict(list)
     by_severity: dict[str, list[float]] = defaultdict(list)
@@ -280,14 +359,72 @@ def aggregate_scores(scores: list[ExampleScore]) -> dict[str, float | int | dict
     return report
 
 
+def error_analysis(
+    scores: Sequence[ExampleScore],
+    golden: Sequence[ReviewExample],
+) -> dict[str, list[dict[str, str | int]]]:
+    """Summarize missed rubric phrases, forbidden hits, and severity confusion."""
+
+    golden_by_id = {example.id: example for example in golden}
+    missed_counts: Counter[str] = Counter()
+    forbidden_counts: Counter[str] = Counter()
+    confusion_counts: Counter[tuple[str, str]] = Counter()
+
+    for score in scores:
+        example = golden_by_id.get(score.id)
+        missed = score.missed_must_mention
+        hits = score.forbidden_hits
+        gold_severity = score.severity or (example.severity if example else "")
+        pred_severity = score.predicted_severity
+        for phrase in missed:
+            missed_counts[phrase] += 1
+        for phrase in hits:
+            forbidden_counts[phrase] += 1
+        if gold_severity:
+            confusion_counts[(pred_severity or "unknown", gold_severity)] += 1
+
+    return {
+        "most_missed_must_mention": [
+            {"phrase": phrase, "count": count} for phrase, count in missed_counts.most_common()
+        ],
+        "forbidden_phrase_hits": [
+            {"phrase": phrase, "count": count} for phrase, count in forbidden_counts.most_common()
+        ],
+        "severity_confusion": [
+            {"predicted": predicted, "gold": gold, "count": count}
+            for (predicted, gold), count in sorted(
+                confusion_counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+            )
+        ],
+    }
+
+
+def _analysis_from_payload(analysis: dict | None) -> dict[str, list]:
+    if not analysis:
+        return {
+            "most_missed_must_mention": [],
+            "forbidden_phrase_hits": [],
+            "severity_confusion": [],
+        }
+    return analysis
+
+
 def render_markdown_report(
     aggregate: dict[str, float | int | dict],
     *,
     title: str = "Code review eval report",
+    analysis: dict | None = None,
+    per_example: list[dict] | None = None,
 ) -> str:
     """Render aggregate metrics as a simple Markdown document."""
 
     lines = [f"# {title}", "", f"**Examples:** {aggregate.get('count', 0)}", ""]
+    if "composite_ci_lo" in aggregate and "composite_ci_hi" in aggregate:
+        lines.append(
+            f"**Composite 95% CI:** {float(aggregate['composite_ci_lo']):.4f} – "
+            f"{float(aggregate['composite_ci_hi']):.4f}"
+        )
+        lines.append("")
     lines.append("## Metrics")
     lines.append("")
     lines.append("| Metric | Mean | Std |")
@@ -322,4 +459,378 @@ def render_markdown_report(
         for sev, val in aggregate["by_severity"].items():  # type: ignore[union-attr]
             lines.append(f"- **{sev}**: {float(val):.4f}")
         lines.append("")
+
+    payload = _analysis_from_payload(analysis)
+    lines.append("## Error analysis")
+    lines.append("")
+    lines.append("### Most-missed must_mention")
+    lines.append("")
+    missed = payload.get("most_missed_must_mention") or []
+    if missed:
+        lines.append("| Phrase | Count |")
+        lines.append("| --- | ---: |")
+        for row in missed:
+            lines.append(f"| {row.get('phrase', '')} | {int(row.get('count', 0))} |")
+    else:
+        lines.append("No missed rubric phrases.")
+    lines.append("")
+    lines.append("### Forbidden-phrase hits")
+    lines.append("")
+    hits = payload.get("forbidden_phrase_hits") or []
+    if hits:
+        lines.append("| Phrase | Count |")
+        lines.append("| --- | ---: |")
+        for row in hits:
+            lines.append(f"| {row.get('phrase', '')} | {int(row.get('count', 0))} |")
+    else:
+        lines.append("No forbidden-phrase hits.")
+    lines.append("")
+    lines.append("### Severity confusion")
+    lines.append("")
+    confusion = payload.get("severity_confusion") or []
+    if confusion:
+        lines.append("| Predicted | Gold | Count |")
+        lines.append("| --- | --- | ---: |")
+        for row in confusion:
+            predicted = row.get("predicted", "")
+            gold = row.get("gold", "")
+            count = int(row.get("count", 0))
+            lines.append(f"| {predicted} | {gold} | {count} |")
+    else:
+        lines.append("No severity pairs recorded.")
+    lines.append("")
+
+    if per_example:
+        ranked = sorted(per_example, key=lambda row: float(row.get("composite", 0.0)))
+        lines.append("## Examples (worst composite first)")
+        lines.append("")
+        lines.append("| ID | Language | Severity | Composite | Mention recall |")
+        lines.append("| --- | --- | --- | ---: | ---: |")
+        for row in ranked:
+            lines.append(
+                f"| `{row.get('id', '')}` | {row.get('language', '')} | "
+                f"{row.get('severity', '')} | {float(row.get('composite', 0.0)):.4f} | "
+                f"{float(row.get('must_mention_recall', 0.0)):.4f} |"
+            )
+        lines.append("")
     return "\n".join(lines)
+
+
+def _render_diff(diff: str) -> str:
+    lines = []
+    for raw in diff.splitlines() or [diff]:
+        escaped = html.escape(raw)
+        if raw.startswith("+++") or raw.startswith("---"):
+            cls = "meta"
+        elif raw.startswith("+"):
+            cls = "add"
+        elif raw.startswith("-"):
+            cls = "del"
+        elif raw.startswith("@@"):
+            cls = "hunk"
+        else:
+            cls = "ctx"
+        lines.append(f'<div class="diff-line {cls}">{escaped or "&nbsp;"}</div>')
+    return f'<pre class="diff">{"".join(lines)}</pre>'
+
+
+def _chip_list(items: list[str], kind: str) -> str:
+    if not items:
+        return f'<p class="empty">No {html.escape(kind)}.</p>'
+    return "".join(
+        f'<span class="chip {html.escape(kind)}">{html.escape(item)}</span>' for item in items
+    )
+
+
+def _render_example_inspector(row: dict, *, open_first: bool = False) -> str:
+    example_id = html.escape(str(row.get("id", "")))
+    opened = " open" if open_first else ""
+    grade = html.escape(str(row.get("grade") or ""))
+    header = (
+        f"{example_id} · {html.escape(str(row.get('language') or ''))} · "
+        f"{html.escape(str(row.get('file_path') or ''))} · "
+        f"composite {float(row.get('composite') or 0.0):.4f}"
+        + (f" · {grade}" if grade else "")
+    )
+    context = html.escape(str(row.get("context") or "")).strip()
+    context_html = f"<p class='context'>{context}</p>" if context else ""
+    diff = str(row.get("diff") or "")
+    diff_html = _render_diff(diff) if diff else "<p class='empty'>No diff on this example.</p>"
+    expected = html.escape(str(row.get("expected_comment") or "")).strip()
+    predicted = html.escape(str(row.get("prediction") or "")).strip()
+    hits = [str(item) for item in row.get("must_mention_hits") or []]
+    missed = [str(item) for item in row.get("missed_must_mention") or []]
+    forbidden = [str(item) for item in row.get("forbidden_hits") or []]
+    return f"""<details class="inspector"{opened}>
+<summary>{header}</summary>
+{context_html}
+<div class="inspector-grid">
+  <div>
+    <h3>Diff</h3>
+    {diff_html}
+  </div>
+  <div>
+    <h3>Expected comment</h3>
+    <p class="comment">{expected or "—"}</p>
+    <h3>Bot comment</h3>
+    <p class="comment">{predicted or "—"}</p>
+    <h3>Required phrases found</h3>
+    <p>{_chip_list(hits, "hit")}</p>
+    <h3>Required phrases missed</h3>
+    <p>{_chip_list(missed, "miss")}</p>
+    <h3>Banned phrases that slipped in</h3>
+    <p>{_chip_list(forbidden, "ban")}</p>
+  </div>
+</div>
+</details>
+"""
+
+
+def render_html_report(
+    aggregate: dict,
+    per_example: list[dict],
+    analysis: dict | None = None,
+) -> str:
+    """Render a self-contained HTML report (inline CSS, no CDN)."""
+
+    payload = _analysis_from_payload(analysis)
+    count = int(aggregate.get("count", len(per_example)))
+    composite = float(aggregate.get("composite", 0.0) or 0.0)
+    ci_lo = aggregate.get("composite_ci_lo")
+    ci_hi = aggregate.get("composite_ci_hi")
+    if ci_lo is None or ci_hi is None:
+        ci = aggregate.get("composite_ci") or []
+        if isinstance(ci, (list, tuple)) and len(ci) == 2:
+            ci_lo, ci_hi = ci
+    ci_html = ""
+    if ci_lo is not None and ci_hi is not None:
+        ci_html = (
+            f'<p class="ci">Composite 95% CI '
+            f"<strong>{float(ci_lo):.4f} – {float(ci_hi):.4f}</strong></p>"
+        )
+
+    metric_keys = (
+        "composite",
+        "token_f1",
+        "bleu_lite",
+        "rouge_l",
+        "length_ratio",
+        "must_mention_recall",
+        "forbidden_rate",
+        "severity_accuracy",
+        "tag_f1",
+        "exact_match",
+    )
+    metric_rows = []
+    for key in metric_keys:
+        if key not in aggregate:
+            continue
+        mean = float(aggregate[key])
+        std = float(aggregate.get(f"{key}_std", 0.0) or 0.0)
+        metric_rows.append(
+            f"<tr><td><code>{html.escape(key)}</code></td>"
+            f"<td class='num'>{mean:.4f}</td><td class='num'>{std:.4f}</td></tr>"
+        )
+
+    def _kv_list(mapping: object) -> str:
+        if not isinstance(mapping, dict) or not mapping:
+            return "<p class='empty'>None</p>"
+        items = "".join(
+            f"<li><strong>{html.escape(str(name))}</strong> "
+            f"{float(value):.4f}</li>"
+            for name, value in mapping.items()
+        )
+        return f"<ul>{items}</ul>"
+
+    def _phrase_table(rows: list, empty: str) -> str:
+        if not rows:
+            return f"<p class='empty'>{html.escape(empty)}</p>"
+        body = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row.get('phrase', '')))}</td>"
+            f"<td class='num'>{int(row.get('count', 0))}</td>"
+            "</tr>"
+            for row in rows
+        )
+        return (
+            "<table><thead><tr><th>Phrase</th><th>Count</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>"
+        )
+
+    confusion = payload.get("severity_confusion") or []
+    if confusion:
+        confusion_body = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row.get('predicted', '')))}</td>"
+            f"<td>{html.escape(str(row.get('gold', '')))}</td>"
+            f"<td class='num'>{int(row.get('count', 0))}</td>"
+            "</tr>"
+            for row in confusion
+        )
+        confusion_html = (
+            "<table><thead><tr><th>Predicted</th><th>Gold</th><th>Count</th></tr></thead>"
+            f"<tbody>{confusion_body}</tbody></table>"
+        )
+    else:
+        confusion_html = "<p class='empty'>No severity pairs recorded.</p>"
+
+    ranked = sorted(per_example, key=lambda row: float(row.get("composite", 0.0)))
+    example_rows = []
+    inspector_blocks = []
+    for index, row in enumerate(ranked):
+        worst = " worst" if index == 0 and ranked else ""
+        example_rows.append(
+            f"<tr class='{worst.strip()}'>"
+            f"<td><code>{html.escape(str(row.get('id', '')))}</code></td>"
+            f"<td>{html.escape(str(row.get('language', '')))}</td>"
+            f"<td>{html.escape(str(row.get('severity', '')))}</td>"
+            f"<td class='num'>{float(row.get('composite', 0.0)):.4f}</td>"
+            f"<td class='num'>{float(row.get('token_f1', 0.0)):.4f}</td>"
+            f"<td class='num'>{float(row.get('must_mention_recall', 0.0)):.4f}</td>"
+            f"<td class='num'>{float(row.get('forbidden_rate', 0.0)):.4f}</td>"
+            f"<td class='num'>{float(row.get('severity_accuracy', 0.0)):.4f}</td>"
+            "</tr>"
+        )
+        if row.get("diff") or row.get("expected_comment") or row.get("prediction"):
+            inspector_blocks.append(_render_example_inspector(row, open_first=index == 0))
+    examples_html = (
+        "<table><thead><tr>"
+        "<th>ID</th><th>Language</th><th>Severity</th><th>Composite</th>"
+        "<th>Token F1</th><th>Mention recall</th><th>Forbidden</th><th>Severity acc.</th>"
+        f"</tr></thead><tbody>{''.join(example_rows)}</tbody></table>"
+        if example_rows
+        else "<p class='empty'>No per-example scores.</p>"
+    )
+    inspector_html = (
+        "<section><h2>Example inspector</h2>"
+        "<p class='empty'>Open an example to read the diff, the expected "
+        "comment, and what the bot wrote.</p>"
+        f"{''.join(inspector_blocks)}</section>"
+        if inspector_blocks
+        else ""
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Code review eval report</title>
+<style>
+:root {{
+  --ink: #12202b;
+  --muted: #5b6b75;
+  --line: #d7e0e6;
+  --paper: #f6f8f7;
+  --card: #ffffff;
+  --accent: #0f6f62;
+  --worst: #fff4f1;
+  --worst-edge: #d45a3a;
+}}
+* {{ box-sizing: border-box; }}
+body {{
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+}}
+header {{
+  background: var(--ink);
+  color: #f4f7f6;
+  padding: 1.6rem 1.4rem 1.3rem;
+}}
+header p {{ margin: 0.35rem 0 0; color: #c5d0d6; }}
+main {{ max-width: 1080px; margin: 0 auto; padding: 1.4rem; }}
+h1, h2 {{ letter-spacing: -0.02em; }}
+h1 {{ margin: 0; font-size: 1.7rem; }}
+h2 {{ margin: 1.6rem 0 0.6rem; font-size: 1.15rem; }}
+.score {{ font-size: 2rem; font-weight: 700; color: #8ee0d2; }}
+.ci {{ color: #d5e6ea; }}
+section {{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem 1.1rem 1.15rem;
+  margin-bottom: 1rem;
+}}
+table {{ border-collapse: collapse; width: 100%; }}
+th, td {{ border-bottom: 1px solid var(--line); padding: 0.45rem 0.5rem; text-align: left; }}
+th {{ font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }}
+.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+tr.worst td {{ background: var(--worst); }}
+tr.worst td:first-child {{ box-shadow: inset 3px 0 0 var(--worst-edge); }}
+.empty {{ color: var(--muted); }}
+code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }}
+ul {{ margin: 0.2rem 0 0; padding-left: 1.2rem; }}
+.grid {{
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}}
+.inspector {{
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.4rem 0.8rem 0.8rem; margin: 0.7rem 0; background: #fbfcfb;
+}}
+.inspector summary {{ cursor: pointer; font-weight: 600; padding: 0.55rem 0; }}
+.inspector-grid {{ display: grid; gap: 1rem; grid-template-columns: 1.15fr 0.85fr; }}
+@media (max-width: 840px) {{ .inspector-grid {{ grid-template-columns: 1fr; }} }}
+.context, .comment {{ color: var(--ink); }}
+.diff {{
+  margin: 0; padding: 0.6rem; background: #0f1c22; color: #d7e6ea;
+  border-radius: 8px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, monospace;
+}}
+.diff-line.add {{ background: #143226; color: #b6e3c5; }}
+.diff-line.del {{ background: #3a1c1a; color: #f0b4aa; }}
+.diff-line.hunk, .diff-line.meta {{ color: #8fb4c0; }}
+.chip {{
+  display: inline-block; margin: 0.15rem 0.25rem 0.15rem 0;
+  padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.8rem;
+}}
+.chip.hit {{ background: #d9f6e6; color: #0d5c3d; }}
+.chip.miss {{ background: #fde2dc; color: #9b2c1a; }}
+.chip.ban {{ background: #fdecc8; color: #8a5800; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>Code review eval report</h1>
+  <p>{count} example{'s' if count != 1 else ''}</p>
+  <p class="score">composite {composite:.4f}</p>
+  {ci_html}
+</header>
+<main>
+<section>
+  <h2>Metrics</h2>
+  <table><thead><tr><th>Metric</th><th>Mean</th><th>Std</th></tr></thead>
+  <tbody>{''.join(metric_rows)}</tbody></table>
+</section>
+<div class="grid">
+<section>
+  <h2>By language</h2>
+  {_kv_list(aggregate.get("by_language"))}
+</section>
+<section>
+  <h2>By severity</h2>
+  {_kv_list(aggregate.get("by_severity"))}
+</section>
+</div>
+<section>
+  <h2>Most-missed must_mention</h2>
+  {_phrase_table(payload.get("most_missed_must_mention") or [], "No missed rubric phrases.")}
+</section>
+<section>
+  <h2>Forbidden-phrase hits</h2>
+  {_phrase_table(payload.get("forbidden_phrase_hits") or [], "No forbidden-phrase hits.")}
+</section>
+<section>
+  <h2>Severity confusion</h2>
+  {confusion_html}
+</section>
+<section>
+  <h2>Examples by worst composite</h2>
+  {examples_html}
+</section>
+{inspector_html}
+</main>
+</body>
+</html>
+"""

@@ -22,6 +22,8 @@ jobs:
         run: ruff check src tests
       - name: Tests
         run: pytest -q
+      - name: Dataset lint
+        run: PYTHONPATH=src python -m review_tuner.evaluate lint data/golden/code_review_golden.jsonl
       - name: Smoke eval
         run: |
           PYTHONPATH=src python -m review_tuner.evaluate eval \
@@ -29,4 +31,7 @@ jobs:
             --predictions examples/predictions.sample.jsonl \
             --out reports/smoke_eval.json \
             --per-example-out reports/smoke_eval_examples.jsonl \
-            --report-md reports/smoke_eval.md
+            --report-md reports/smoke_eval.md \
+            --report-html reports/smoke_eval.html \
+            --report-json reports/smoke_eval.json
+          PYTHONPATH=src python -m review_tuner.evaluate dashboard reports/
