@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] — 2026-08-31
+
+### Changed
+- README clone URL and version so GitHub `main` is the studio product.
+
 ## [0.6.0] — 2026-08-31
 
 ### Added
