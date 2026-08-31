@@ -16,12 +16,12 @@ from review_tuner.lint import lint_dataset
 from review_tuner.metrics import (
     ExampleScore,
     aggregate_scores,
-    error_analysis,
     render_html_report,
     render_markdown_report,
     score_example,
 )
 from review_tuner.schema import DatasetError, Prediction, ReviewExample
+from review_tuner.view import build_eval_view, unmatched_prediction_ids
 
 _DELETED_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DELETED_STOPWORDS = {
@@ -182,12 +182,38 @@ def cmd_eval(args: argparse.Namespace) -> int:
             ],
         )
 
-    scores = score_predictions(golden, predictions)
-    aggregate = aggregate_scores(scores)
-    analysis = error_analysis(scores, golden)
-    per_example = [score.as_dict() for score in scores]
+    extra = unmatched_prediction_ids(golden, predictions)
+    view = build_eval_view(
+        golden,
+        predictions,
+        extra_prediction_ids=extra,
+        threshold=float(getattr(args, "fail_under", None) or 0.60),
+    )
+    aggregate = view["aggregate"]
+    analysis = view["error_analysis"]
+    include_text = bool(getattr(args, "include_text", False))
+    per_example = view["examples"] if include_text else [
+        {key: row[key] for key in row if key not in {
+            "diff",
+            "expected_comment",
+            "prediction",
+            "context",
+            "file_path",
+            "explanation",
+            "must_mention",
+            "avoid",
+            "must_mention_hits",
+            "tags",
+            "predicted_tags",
+        }}
+        for row in view["examples"]
+    ]
     payload = dict(aggregate)
     payload["error_analysis"] = analysis
+    payload["letter_grade"] = view["letter_grade"]
+    payload["story"] = view["story"]
+    if extra:
+        payload["extra_prediction_ids"] = extra
 
     out_path = Path(args.out)
     _write_json(out_path, payload)
@@ -207,7 +233,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         html_path = Path(report_html)
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html_path.write_text(
-            render_html_report(aggregate, per_example, analysis),
+            render_html_report(aggregate, view["examples"], analysis),
             encoding="utf-8",
         )
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -435,6 +461,15 @@ a {{ color: #0f6f62; }}
 """
 
 
+def cmd_studio(args: argparse.Namespace) -> int:
+    from review_tuner.studio import main as studio_main
+
+    argv = ["--host", str(args.host), "--port", str(args.port)]
+    if getattr(args, "open_browser", False):
+        argv.append("--open")
+    return studio_main(argv)
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     reports_dir = Path(args.reports_dir)
     if not reports_dir.is_dir():
@@ -486,6 +521,12 @@ def build_parser() -> argparse.ArgumentParser:
     dash_p.add_argument("reports_dir")
     dash_p.set_defaults(func=cmd_dashboard)
 
+    studio_p = sub.add_parser("studio", help="Open the local Review Tuner Studio in a browser.")
+    studio_p.add_argument("--host", default="127.0.0.1")
+    studio_p.add_argument("--port", type=int, default=8765)
+    studio_p.add_argument("--open", action="store_true", dest="open_browser")
+    studio_p.set_defaults(func=cmd_studio)
+
     # Backward-compatible top-level flags (no subcommand) → eval
     _add_eval_args(parser)
     return parser
@@ -531,6 +572,11 @@ def _add_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", default=None, help="Filter golden examples by language.")
     parser.add_argument("--severity", default=None, help="Filter golden examples by severity.")
     parser.add_argument("--tag", default=None, help="Filter golden examples by tag.")
+    parser.add_argument(
+        "--include-text",
+        action="store_true",
+        help="Include diffs and comments in the per-example JSONL (always on for HTML).",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -544,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         "validate",
         "lint",
         "dashboard",
+        "studio",
         "-h",
         "--help",
         "--version",

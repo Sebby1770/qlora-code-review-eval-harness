@@ -35,32 +35,10 @@ def _as_phrases(value: object) -> list[str]:
     return [str(item).strip().lower() for item in value if str(item).strip()]
 
 
-def lint_dataset(path: str | Path) -> list[LintIssue]:
-    """Lint a JSONL dataset and return errors plus warnings."""
+def lint_records(records: list[tuple[int, dict]]) -> list[LintIssue]:
+    """Lint already-parsed JSON objects. ``records`` is ``(row_number, object)``."""
 
-    path = Path(path)
     issues: list[LintIssue] = []
-    records: list[tuple[int, dict]] = []
-
-    with path.open("r", encoding="utf-8") as handle:
-        for row_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                value = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                issues.append(
-                    LintIssue("error", "invalid_json", f"invalid JSON: {exc}", row=row_number)
-                )
-                continue
-            if not isinstance(value, dict):
-                issues.append(
-                    LintIssue("error", "invalid_json", "expected a JSON object", row=row_number)
-                )
-                continue
-            records.append((row_number, value))
-
     seen_ids: dict[str, int] = {}
     for row_number, raw in records:
         example_id = str(raw.get("id") or "").strip() or None
@@ -194,6 +172,36 @@ def lint_dataset(path: str | Path) -> list[LintIssue]:
                 )
             )
 
+    return issues
+
+
+def lint_dataset(path: str | Path) -> list[LintIssue]:
+    """Lint a JSONL dataset and return errors plus warnings."""
+
+    path = Path(path)
+    issues: list[LintIssue] = []
+    records: list[tuple[int, dict]] = []
+
+    with path.open("r", encoding="utf-8") as handle:
+        for row_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                value = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                issues.append(
+                    LintIssue("error", "invalid_json", f"invalid JSON: {exc}", row=row_number)
+                )
+                continue
+            if not isinstance(value, dict):
+                issues.append(
+                    LintIssue("error", "invalid_json", "expected a JSON object", row=row_number)
+                )
+                continue
+            records.append((row_number, value))
+
+    issues.extend(lint_records(records))
     return issues
 
 

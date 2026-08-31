@@ -5,6 +5,7 @@ from review_tuner.metrics import (
     bleu_lite,
     bootstrap_ci,
     error_analysis,
+    infer_severity,
     length_ratio,
     render_html_report,
     rouge_l_lite,
@@ -29,6 +30,12 @@ def _ex(**kwargs):
     )
     base.update(kwargs)
     return ReviewExample(**base)
+
+
+def test_infer_severity_uses_stable_order():
+    assert infer_severity("Please treat this as blocker severity, not a nit") == "blocker"
+    assert infer_severity("[high] missing authz") == "high"
+    assert infer_severity("nit severity only") == "nit"
 
 
 def test_token_f1_identical():

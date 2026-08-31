@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from review_tuner.schema import VALID_SEVERITIES, Prediction, ReviewExample
+from review_tuner.schema import SEVERITY_ORDER, Prediction, ReviewExample
 
 _PUNCT_TRANSLATION = str.maketrans({char: " " for char in string.punctuation})
 
@@ -156,14 +156,19 @@ def f1_for_sets(predicted: tuple[str, ...], expected: tuple[str, ...]) -> float:
 
 
 def infer_severity(text: str) -> str | None:
-    """Infer severity from structured or prose predictions."""
+    """Infer severity from structured or prose predictions.
 
+    Labels are checked in ``SEVERITY_ORDER`` so a comment that mentions more
+    than one severity is not resolved by set iteration order.
+    """
+
+    lowered = text.lower()
     normalized = normalize_text(text)
     match = re.search(r"\bseverity\s+(blocker|high|medium|low|nit)\b", normalized)
     if match:
         return match.group(1)
-    for severity in VALID_SEVERITIES:
-        if f"[{severity}]" in text.lower() or f"{severity} severity" in normalized:
+    for severity in SEVERITY_ORDER:
+        if f"[{severity}]" in lowered or f"{severity} severity" in normalized:
             return severity
     return None
 
@@ -511,6 +516,76 @@ def render_markdown_report(
     return "\n".join(lines)
 
 
+def _render_diff(diff: str) -> str:
+    lines = []
+    for raw in diff.splitlines() or [diff]:
+        escaped = html.escape(raw)
+        if raw.startswith("+++") or raw.startswith("---"):
+            cls = "meta"
+        elif raw.startswith("+"):
+            cls = "add"
+        elif raw.startswith("-"):
+            cls = "del"
+        elif raw.startswith("@@"):
+            cls = "hunk"
+        else:
+            cls = "ctx"
+        lines.append(f'<div class="diff-line {cls}">{escaped or "&nbsp;"}</div>')
+    return f'<pre class="diff">{"".join(lines)}</pre>'
+
+
+def _chip_list(items: list[str], kind: str) -> str:
+    if not items:
+        return f'<p class="empty">No {html.escape(kind)}.</p>'
+    return "".join(
+        f'<span class="chip {html.escape(kind)}">{html.escape(item)}</span>' for item in items
+    )
+
+
+def _render_example_inspector(row: dict, *, open_first: bool = False) -> str:
+    example_id = html.escape(str(row.get("id", "")))
+    opened = " open" if open_first else ""
+    grade = html.escape(str(row.get("grade") or ""))
+    header = (
+        f"{example_id} · {html.escape(str(row.get('language') or ''))} · "
+        f"{html.escape(str(row.get('file_path') or ''))} · "
+        f"composite {float(row.get('composite') or 0.0):.4f}"
+        + (f" · {grade}" if grade else "")
+    )
+    context = html.escape(str(row.get("context") or "")).strip()
+    context_html = f"<p class='context'>{context}</p>" if context else ""
+    diff = str(row.get("diff") or "")
+    diff_html = _render_diff(diff) if diff else "<p class='empty'>No diff on this example.</p>"
+    expected = html.escape(str(row.get("expected_comment") or "")).strip()
+    predicted = html.escape(str(row.get("prediction") or "")).strip()
+    hits = [str(item) for item in row.get("must_mention_hits") or []]
+    missed = [str(item) for item in row.get("missed_must_mention") or []]
+    forbidden = [str(item) for item in row.get("forbidden_hits") or []]
+    return f"""<details class="inspector"{opened}>
+<summary>{header}</summary>
+{context_html}
+<div class="inspector-grid">
+  <div>
+    <h3>Diff</h3>
+    {diff_html}
+  </div>
+  <div>
+    <h3>Expected comment</h3>
+    <p class="comment">{expected or "—"}</p>
+    <h3>Bot comment</h3>
+    <p class="comment">{predicted or "—"}</p>
+    <h3>Required phrases found</h3>
+    <p>{_chip_list(hits, "hit")}</p>
+    <h3>Required phrases missed</h3>
+    <p>{_chip_list(missed, "miss")}</p>
+    <h3>Banned phrases that slipped in</h3>
+    <p>{_chip_list(forbidden, "ban")}</p>
+  </div>
+</div>
+</details>
+"""
+
+
 def render_html_report(
     aggregate: dict,
     per_example: list[dict],
@@ -601,6 +676,7 @@ def render_html_report(
 
     ranked = sorted(per_example, key=lambda row: float(row.get("composite", 0.0)))
     example_rows = []
+    inspector_blocks = []
     for index, row in enumerate(ranked):
         worst = " worst" if index == 0 and ranked else ""
         example_rows.append(
@@ -615,6 +691,8 @@ def render_html_report(
             f"<td class='num'>{float(row.get('severity_accuracy', 0.0)):.4f}</td>"
             "</tr>"
         )
+        if row.get("diff") or row.get("expected_comment") or row.get("prediction"):
+            inspector_blocks.append(_render_example_inspector(row, open_first=index == 0))
     examples_html = (
         "<table><thead><tr>"
         "<th>ID</th><th>Language</th><th>Severity</th><th>Composite</th>"
@@ -622,6 +700,14 @@ def render_html_report(
         f"</tr></thead><tbody>{''.join(example_rows)}</tbody></table>"
         if example_rows
         else "<p class='empty'>No per-example scores.</p>"
+    )
+    inspector_html = (
+        "<section><h2>Example inspector</h2>"
+        "<p class='empty'>Open an example to read the diff, the expected "
+        "comment, and what the bot wrote.</p>"
+        f"{''.join(inspector_blocks)}</section>"
+        if inspector_blocks
+        else ""
     )
 
     return f"""<!DOCTYPE html>
@@ -676,7 +762,32 @@ tr.worst td:first-child {{ box-shadow: inset 3px 0 0 var(--worst-edge); }}
 .empty {{ color: var(--muted); }}
 code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }}
 ul {{ margin: 0.2rem 0 0; padding-left: 1.2rem; }}
-.grid {{ display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }}
+.grid {{
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}}
+.inspector {{
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.4rem 0.8rem 0.8rem; margin: 0.7rem 0; background: #fbfcfb;
+}}
+.inspector summary {{ cursor: pointer; font-weight: 600; padding: 0.55rem 0; }}
+.inspector-grid {{ display: grid; gap: 1rem; grid-template-columns: 1.15fr 0.85fr; }}
+@media (max-width: 840px) {{ .inspector-grid {{ grid-template-columns: 1fr; }} }}
+.context, .comment {{ color: var(--ink); }}
+.diff {{
+  margin: 0; padding: 0.6rem; background: #0f1c22; color: #d7e6ea;
+  border-radius: 8px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, monospace;
+}}
+.diff-line.add {{ background: #143226; color: #b6e3c5; }}
+.diff-line.del {{ background: #3a1c1a; color: #f0b4aa; }}
+.diff-line.hunk, .diff-line.meta {{ color: #8fb4c0; }}
+.chip {{
+  display: inline-block; margin: 0.15rem 0.25rem 0.15rem 0;
+  padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.8rem;
+}}
+.chip.hit {{ background: #d9f6e6; color: #0d5c3d; }}
+.chip.miss {{ background: #fde2dc; color: #9b2c1a; }}
+.chip.ban {{ background: #fdecc8; color: #8a5800; }}
 </style>
 </head>
 <body>
@@ -718,6 +829,7 @@ ul {{ margin: 0.2rem 0 0; padding-left: 1.2rem; }}
   <h2>Examples by worst composite</h2>
   {examples_html}
 </section>
+{inspector_html}
 </main>
 </body>
 </html>
