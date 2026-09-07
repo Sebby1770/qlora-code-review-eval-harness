@@ -1,30 +1,33 @@
 :root {
-  --bg: #0b0d10;
-  --bg-2: #12151b;
-  --panel: #171b22;
-  --ink: #ece7db;
-  --muted: #9a9386;
-  --line: #2a3038;
+  --bg: #120e0a;
+  --bg-2: #1b1510;
+  --panel: #1f1812;
+  --ink: #f3ead8;
+  --muted: #b3a28c;
+  --line: #3a2f24;
   --accent: #e2b657;
-  --add: #5dcea6;
+  --add: #7dce6a;
   --del: #ef6f6c;
-  --hunk: #7eb6d6;
-  --pass: #5dcea6;
+  --hunk: #d4a574;
+  --pass: #7dce6a;
   --fail: #ef6f6c;
   --weak: #e2b657;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --sans: Newsreader, "Iowan Old Style", Georgia, serif;
 }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
 body {
-  font: 14px/1.45 var(--sans);
+  font: 16px/1.45 var(--sans);
   background:
-    radial-gradient(1200px 500px at 10% -10%, #1b2330 0%, transparent 55%),
+    radial-gradient(900px 420px at 8% -8%, #3a2a12 0%, transparent 50%),
+    radial-gradient(700px 380px at 100% 0%, #143018 0%, transparent 42%),
     var(--bg);
   color: var(--ink);
 }
+.mark { box-shadow: 0 0 24px rgba(125, 206, 106, 0.35); }
+.grade { font-family: Newsreader, serif; }
 
 .top {
   display: flex;
