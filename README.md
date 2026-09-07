@@ -1,73 +1,63 @@
-# Review Tuner Studio
+# QLoRA Code Review Eval Harness
 
-**Version 0.7.0** · [github.com/Sebby1770/qlora-code-review-eval-harness](https://github.com/Sebby1770/qlora-code-review-eval-harness)
+[![CI](https://github.com/Sebby1770/qlora-code-review-eval-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Sebby1770/qlora-code-review-eval-harness/actions/workflows/ci.yml)
 
-**Live site:** [https://sebby1770.github.io/qlora-code-review-eval-harness/](https://sebby1770.github.io/qlora-code-review-eval-harness/)
+Gate a review bot the way a staff engineer would: a golden set, a composite score you can fail CI on, HTML/Markdown reports, and a local studio that scores in the browser. QLoRA training is optional and never required for eval.
 
-Grade a code-review bot the way you would grade a teammate.
+## Studio (start here)
 
-This repo still trains a compact causal LLM with QLoRA and scores it against a labelled golden set. The **studio** is the default path: no GPU, no npm, no account. The GitHub Pages copy scores in the browser. Click **Try the sample**, read a letter grade, and inspect the worst example — diff, expected comment, bot comment, and the phrases it skipped.
+The studio is static HTML/JS. It reimplements the Python scorer so you can drop JSONL files without installing Torch. Opening it loads the sample automatically, with filters, a score waterfall, and a severity confusion matrix.
 
 ```bash
-git clone https://github.com/Sebby1770/qlora-code-review-eval-harness.git
-cd qlora-code-review-eval-harness
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-review-eval studio --open
+make studio
 ```
 
-Then open [http://127.0.0.1:8765/](http://127.0.0.1:8765/). Diffs stay on your machine. Or skip the install and use the [live studio](https://sebby1770.github.io/qlora-code-review-eval-harness/).
+Opens [http://127.0.0.1:8765/](http://127.0.0.1:8765/). Drop a golden JSONL and a predictions JSONL, or click **Try the sample**. `J` / `K` moves through examples. A second prediction file enables compare mode.
 
-## Two audiences, one harness
+The same files are in `src/review_tuner/studio_web/` and can be published as GitHub Pages.
 
-| You want… | Use |
-| --- | --- |
-| To understand if a bot would catch a security hole | **Studio** (`review-eval studio`) |
-| A CI gate on a golden JSONL | `review-eval eval … --fail-under 0.60` |
-| To fine-tune Mistral 7B with QLoRA | `review-train-qlora` on a CUDA box |
+## CI gate
 
-Eval never downloads a model. Training is optional.
+Eval has no ML dependencies. Composite weights are fixed:
 
-## What the studio shows you
-
-- A **letter grade** (A–F) and a **Pass / Weak / Fail** against a threshold you can change
-- Keyboard: **J** / **K** walk examples, **Esc** closes the inspector
-- Copy the English summary or download the run as JSON
-- One paragraph in English: what was skipped, how security cases did, and a 95% confidence band
-- A **Start here** card for the worst example
-- An inspector: unified diff, expected vs bot comment, required-phrase hits/misses, score waterfall
-- Compare two prediction files (what newly caught / newly missed)
-- A dataset linter so a messy JSONL fails before it grades
-
-Advanced metrics (token F1, BLEU-lite, ROUGE-L) live behind a disclosure. You do not need them.
-
-## Evaluation commands
+`0.35` token F1 + `0.25` must-mention recall + `0.20` severity + `0.15` tag F1 + `0.05` forbidden-phrase absence.
 
 ```bash
-# Score (baseline if --predictions omitted)
-review-eval eval --golden data/golden/code_review_golden.jsonl \
+review-eval --golden data/golden/code_review_golden.jsonl \
+  --predictions examples/predictions.sample.jsonl \
+  --out reports/eval.json \
+  --per-example-out reports/eval_examples.jsonl \
   --report-md reports/eval.md \
   --report-html reports/eval.html \
-  --report-json reports/eval.json
-
-# Deterministic baseline predictions
-review-eval baseline --golden data/golden/code_review_golden.jsonl --out predictions.jsonl
-
-# Compare two prediction files
-review-eval compare --golden data/golden/code_review_golden.jsonl pred_a.jsonl pred_b.jsonl
-
-review-eval validate data/golden/code_review_golden.jsonl
-review-eval lint data/golden/code_review_golden.jsonl
-review-eval dashboard reports/
-review-eval studio --port 8765
+  --fail-under 0.60
 ```
 
-HTML reports now include a no-JavaScript **example inspector** (`<details>`) with the diff and comments.
+`review-eval --golden ...` still works (legacy flags). Subcommands:
 
-Filters: `--language python --severity high --tag security`
+| Command | Purpose |
+| --- | --- |
+| `review-eval eval` | Score predictions (same flags as above) |
+| `review-eval baseline` | Write heuristic baseline predictions |
+| `review-eval compare --golden G --a A.jsonl --b B.jsonl` | Newly caught / newly missed / Δ composite |
+| `review-eval lint data/golden/code_review_golden.jsonl` | Duplicate ids, empty diffs, rubric issues |
+| `review-eval slices --golden G --predictions P` | Mean composite by language, severity, tag |
+| `review-eval studio` | Serve the local web studio |
+| `review-eval report --eval eval.json --examples eval_examples.jsonl --report-html out.html` | Rebuild reports |
 
-## Dataset format
+`review-eval` or `review-eval help` lists commands. `review-eval --help` shows the evaluator flags.
+
+```bash
+make verify          # lint, types, tests, smoke eval, data lint, compare smoke, wheel
+make lint-data
+make compare-smoke
+```
+
+Smoke eval writes `reports/smoke_eval.json`, `reports/smoke_eval_examples.jsonl`, `reports/smoke_eval.md`, and `reports/smoke_eval.html`.
+
+## Dataset
 
 Training rows use `review_comment`; golden rows use `expected_comment`.
 
@@ -88,24 +78,11 @@ Training rows use `review_comment`; golden rows use `expected_comment`.
 }
 ```
 
-## How scoring works (short)
+`data/golden/code_review_golden.jsonl` has 12 examples across Python, TypeScript, Go, Rust, Java, and Ruby, covering security, performance, correctness, and tests. A couple of cases are written so the heuristic baseline misses them — a perfect A means the bot actually read the diff.
 
-Exact string match is too brittle for review comments. The composite mixes:
+## Optional GPU train
 
-| Weight | Signal | In English |
-| ---: | --- | --- |
-| 25% | token F1 | Shared words with the expected comment |
-| 20% | required-phrase recall | The facts a good comment cannot skip |
-| 15% | severity accuracy | Did it call a security hole “high”? |
-| 10% | BLEU-lite | Short phrase overlap |
-| 10% | ROUGE-L-lite | Longest matching word run |
-| 10% | tag F1 | security / tests / performance, … |
-| 5% | length ratio | Not wildly shorter or longer |
-| 5% | 1 − forbidden rate | Did it avoid banned phrases? |
-
-Required phrases are matched after lowercasing and stripping punctuation. A clever paraphrase that never uses those words will score poorly on that term — that is intentional and documented in the studio’s “How scoring works” page.
-
-## Train with QLoRA (optional)
+Install the training extra only on a CUDA machine:
 
 ```bash
 python -m pip install -e ".[train]"
@@ -118,9 +95,9 @@ PYTHONPATH=src python -m review_tuner.train_qlora \
   --dry-run
 ```
 
-The default recipe is Mistral 7B Instruct, 4-bit NF4 LoRA. Adapter output: `outputs/code-review-mistral-qlora`.
+`review-train-qlora` and `review-infer` stay available. The default config is Mistral 7B NF4 QLoRA; swap `model.name` for a smaller local model when you want a cheaper run.
 
-Generate predictions, then score them:
+Generate predictions, then score them with `review-eval` as above:
 
 ```bash
 PYTHONPATH=src python -m review_tuner.infer \
@@ -128,33 +105,10 @@ PYTHONPATH=src python -m review_tuner.infer \
   --adapter outputs/code-review-mistral-qlora \
   --golden data/golden/code_review_golden.jsonl \
   --out reports/predictions.jsonl
-
-review-eval eval --golden data/golden/code_review_golden.jsonl \
-  --predictions reports/predictions.jsonl \
-  --report-html reports/eval.html --fail-under 0.70
 ```
 
-## Tests
+## Metric notes
 
-```bash
-make test
-make smoke-eval
-```
+Exact string match is too brittle for review comments. The harness combines lexical overlap, rubric phrase recall, forbidden phrase rate, severity accuracy, and tag F1. Reports also include BLEU-lite, ROUGE-L-lite, length ratio, a security-fail bit (blocker/high with incomplete must-mention), language/severity/tag slices, a bootstrap 95% CI on composite (n≥3, seed 1337), a letter grade A–F, and pass/weak/fail against a 0.60 threshold.
 
-CI runs ruff, pytest, dataset lint, and a smoke eval on Python 3.11 and 3.12.
-
-## Layout
-
-```
-src/review_tuner/           engine, CLI, studio server
-src/review_tuner/studio_web  the local frontend (no build step)
-data/golden/                 15 labelled review cases
-data/train/                  tiny SFT sample
-examples/                    sample predictions
-```
-
-## Metric references
-
-- [PEFT quantization guide](https://huggingface.co/docs/peft/developer_guides/quantization)
-- [TRL SFTTrainer docs](https://huggingface.co/docs/trl/en/sft_trainer)
-- [Transformers bitsandbytes docs](https://huggingface.co/docs/transformers/main/quantization/bitsandbytes)
+See [CHANGELOG.md](CHANGELOG.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md).

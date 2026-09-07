@@ -1,310 +1,107 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <meta name="color-scheme" content="dark"/>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Review Tuner Studio</title>
-  <meta name="description" content="Grade a code-review bot the way you would grade a teammate. Local, no GPU required."/>
-  <meta name="theme-color" content="#121417"/>
-  <meta property="og:title" content="Review Tuner Studio"/>
-  <meta property="og:description" content="Grade a code-review bot in your browser. No GPU. Nothing is uploaded."/>
-  <meta property="og:url" content="https://sebby1770.github.io/qlora-code-review-eval-harness/"/>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23121417'/%3E%3Cpath d='M8 12h16M8 16.5h11M8 21h8' stroke='%23e3b23c' stroke-width='2' fill='none'/%3E%3C/svg%3E"/>
-  <link rel="stylesheet" href="styles.css"/>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
-  <div class="grain" aria-hidden="true"></div>
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <div id="help-overlay" class="help-overlay" hidden>
-    <article class="panel">
-      <h2>Keyboard</h2>
-      <p><kbd>?</kbd> this sheet · <kbd>J</kbd>/<kbd>K</kbd> examples · <kbd>Esc</kbd> close</p>
-      <p>Click a heatmap cell to filter language and severity. Click a table header to sort.</p>
-      <button class="primary" type="button" id="help-close">Got it</button>
-    </article>
-  </div>
-
   <header class="top">
-    <a class="brand" href="#/" aria-label="Review Tuner Studio home">
-      <span class="mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="28" height="28">
-          <rect x="3" y="5" width="26" height="22" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <path d="M8 12h16M8 16.5h11M8 21h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          <circle cx="23.5" cy="21" r="3.1" fill="#e3b23c"/>
-        </svg>
-      </span>
-      <span>
-        <strong>Review Tuner</strong>
-        <small>Studio</small>
-      </span>
-    </a>
-    <nav class="nav" aria-label="Primary">
-      <a href="#/" data-nav="home">Home</a>
-      <a href="#/guide" data-nav="guide">Guide</a>
-      <a href="#/grade" data-nav="grade">Grade</a>
-      <a href="#/compare" data-nav="compare">Compare</a>
-      <a href="#/dataset" data-nav="dataset">Dataset</a>
-      <a href="#/how" data-nav="how">How scoring works</a>
-    </nav>
-    <div class="top-meta">
-      <button class="ghost" type="button" id="theme-toggle" aria-pressed="false">Light paper</button>
-      <span class="pill" id="health-pill">Local · no GPU</span>
+    <div class="brand">
+      <span class="mark">RT</span>
+      <div>
+        <h1>Review Tuner Studio</h1>
+        <p>Drop a golden JSONL and predictions. Scoring runs in the browser — same weights as CI.</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button type="button" id="sample-btn">Try the sample</button>
+      <button type="button" id="baseline-btn" class="ghost">Score heuristic baseline</button>
+      <button type="button" id="copy-summary" class="ghost">Copy summary</button>
+      <button type="button" id="download-json" class="ghost">Download JSON</button>
     </div>
   </header>
 
-  <main id="main">
-    <section id="view-home" class="view" data-view="home">
-      <p class="kicker">Live on GitHub Pages · a review desk, not an ML console</p>
-      <h1>Grade a code-review bot the way you would grade a teammate.</h1>
-      <p class="lede">
-        Give it diffs and the comments it wrote. Studio tells you, in English, what it caught,
-        what it skipped, and whether you would ship it. This GitHub Pages copy scores in the tab.
-        Nothing is uploaded.
-      </p>
-      <div class="doors">
-        <button class="door" data-action="sample" type="button">
-          <span class="door-index">01</span>
-          <h2>Try the sample</h2>
-          <p>Fifteen labelled review cases plus sample bot comments. One click. No files.</p>
-        </button>
-        <button class="door" data-action="baseline" type="button">
-          <span class="door-index">02</span>
-          <h2>Grade the built-in baseline</h2>
-          <p>A deterministic stand-in that never downloads a model. Use this to learn the desk.</p>
-        </button>
-        <button class="door" data-action="goto-grade" type="button">
-          <span class="door-index">03</span>
-          <h2>Upload my files</h2>
-          <p>Drop a golden JSONL and optional predictions. Same format the CLI uses.</p>
-        </button>
+  <section class="drop-row" id="drop-row">
+    <label class="drop" id="golden-drop">
+      <input type="file" id="golden-file" accept=".jsonl,application/jsonl,text/plain">
+      <strong>Golden JSONL</strong>
+      <span id="golden-name">Drop or choose a file</span>
+    </label>
+    <label class="drop" id="pred-drop">
+      <input type="file" id="pred-file" accept=".jsonl,application/jsonl,text/plain">
+      <strong>Predictions JSONL</strong>
+      <span id="pred-name">Drop or choose a file</span>
+    </label>
+    <label class="drop optional" id="pred-b-drop">
+      <input type="file" id="pred-b-file" accept=".jsonl,application/jsonl,text/plain">
+      <strong>Compare (optional)</strong>
+      <span id="pred-b-name">Second prediction file</span>
+    </label>
+  </section>
+
+  <p class="status" id="status">Load files or try the sample to score a review bot.</p>
+
+  <section class="hero hidden" id="hero">
+    <div class="grade" id="grade">–</div>
+    <div class="hero-copy">
+      <div class="hero-meta">
+        <span id="composite">composite —</span>
+        <span class="chip" id="gate">—</span>
+        <span id="count"></span>
       </div>
-      <ol class="steps">
-        <li><strong>Exam.</strong> A golden set is a labelled exam: diffs plus the comment a careful reviewer would write.</li>
-        <li><strong>Answers.</strong> Predictions are the bot’s comments. Skip them and Studio uses the baseline.</li>
-        <li><strong>Grade.</strong> We look for required phrases, banned phrases, seriousness, and overlap — then say it in English.</li>
-      </ol>
-      <h2 class="subhead">Recent grades on this computer</h2>
-      <div id="run-history" class="history"></div>
-    </section>
+      <p id="summary"></p>
+      <p class="compare-line hidden" id="compare-line"></p>
+    </div>
+  </section>
 
-    <section id="view-guide" class="view" hidden data-view="guide">
-      <p class="kicker">Guide</p>
-      <h1>Four steps. No model required.</h1>
-      <ol class="guide-steps">
-        <li>
-          <h2>1. An exam, not a prompt</h2>
-          <p>A golden set is a list of code diffs with the comment a careful reviewer would write, plus a few phrases that comment must mention.</p>
-        </li>
-        <li>
-          <h2>2. The bot’s answers</h2>
-          <p>Predictions are those comments. If you do not have a model, Studio uses a built-in baseline that only looks at keywords in the diff.</p>
-        </li>
-        <li>
-          <h2>3. A letter grade, in English</h2>
-          <p>We do not require word-for-word match. We ask: did it mention the required facts, avoid banned nits, and get the seriousness right?</p>
-        </li>
-        <li>
-          <h2>4. Open the worst example first</h2>
-          <p>The inspector shows the diff, the expected comment, what the bot wrote, and which required phrases it skipped.</p>
-        </li>
-      </ol>
-      <button class="primary" type="button" data-action="sample">Try the sample now</button>
-    </section>
+  <section class="metrics hidden" id="metrics"></section>
+  <section class="slices hidden" id="slices"></section>
 
-    <section id="view-grade" class="view" hidden data-view="grade">
-      <p class="kicker">Grade</p>
-      <h1>Set the exam, then sit the bot.</h1>
-      <form id="grade-form" class="grade-layout">
-        <fieldset class="panel">
-          <legend>Golden set</legend>
-          <p class="hint">The labelled exam. JSONL or a JSON array. Each row needs <code>id</code>, <code>diff</code>, and <code>expected_comment</code>.</p>
-          <div class="choice-row">
-            <label><input type="radio" name="golden-source" value="sample" checked/> Bundled sample</label>
-            <label><input type="radio" name="golden-source" value="file"/> File</label>
-            <label><input type="radio" name="golden-source" value="paste"/> Paste</label>
-          </div>
-          <input id="golden-file" type="file" accept=".jsonl,.json,application/json,text/plain" hidden/>
-          <textarea id="golden-paste" class="code-input" hidden rows="10" placeholder='{"id":"ex-1","language":"python","file_path":"a.py","context":"...","diff":"...","expected_comment":"...","severity":"high","tags":["security"],"rubric":{"must_mention":["auth"],"avoid":["style"]}}'></textarea>
-          <p class="hint" id="golden-paste-status" hidden></p>
-        </fieldset>
-        <fieldset class="panel">
-          <legend>What wrote the comments?</legend>
-          <p class="hint">Leave this on baseline if you do not have a model yet. Anyone can complete a run.</p>
-          <div class="choice-row">
-            <label><input type="radio" name="pred-source" value="baseline" checked/> Built-in baseline</label>
-            <label><input type="radio" name="pred-source" value="sample"/> Sample predictions</label>
-            <label><input type="radio" name="pred-source" value="file"/> File</label>
-            <label><input type="radio" name="pred-source" value="paste"/> Paste</label>
-          </div>
-          <input id="pred-file" type="file" accept=".jsonl,.json,application/json,text/plain" hidden/>
-          <textarea id="pred-paste" class="code-input" hidden rows="8" placeholder='{"id":"ex-1","prediction":"Please restore the expires_at check.","severity":"high","tags":["security"]}'></textarea>
-          <p class="hint" id="pred-paste-status" hidden></p>
-        </fieldset>
-        <fieldset class="panel advanced-box">
-          <legend>Filters &amp; gate <span class="quiet">(optional)</span></legend>
-          <div class="field-grid">
-            <label>Language <input name="language" type="text" placeholder="python"/></label>
-            <label>Severity <input name="severity" type="text" placeholder="high"/></label>
-            <label>Tag <input name="tag" type="text" placeholder="security"/></label>
-            <label>Pass if overall ≥ <input name="threshold" type="number" min="0" max="1" step="0.01" value="0.60"/></label>
-          </div>
-        </fieldset>
-        <div class="run-row">
-          <button class="primary" type="submit">Grade this run</button>
-          <p class="hint" id="grade-status" role="status"></p>
-        </div>
-      </form>
-    </section>
-
-    <section id="view-run" class="view" hidden data-view="run">
-      <p class="kicker">Results</p>
-      <div id="run-hero" class="hero"></div>
-      <p id="run-story" class="story"></p>
-      <div class="run-actions">
-        <button class="ghost" type="button" id="copy-story">Copy the English summary</button>
-        <button class="ghost" type="button" id="download-run">Download this run as JSON</button>
-        <button class="ghost" type="button" id="download-html">Download HTML report</button>
-        <button class="ghost" type="button" id="download-badge">Download badge SVG</button>
-        <span class="hint" id="run-keys">Keys: <kbd>J</kbd> next · <kbd>K</kbd> previous · <kbd>Esc</kbd> close inspector</span>
+  <section class="workspace hidden" id="workspace">
+    <div class="list-pane">
+      <div class="pane-head">
+        <h2>Examples</h2>
+        <span class="hint">J / K to move</span>
+        <label class="filter">
+          Lang
+          <select id="filter-lang"><option value="">all</option></select>
+        </label>
+        <label class="filter">
+          Sev
+          <select id="filter-sev"><option value="">all</option></select>
+        </label>
       </div>
-      <div id="run-warning" class="banner" hidden></div>
-      <label class="gate-slider">Pass if overall ≥ <strong id="gate-value">60%</strong>
-        <input id="gate-slider" type="range" min="0" max="100" value="60"/>
-      </label>
-      <div id="histogram" class="histogram"></div>
-      <div id="by-tag" class="chips"></div>
-      <div id="confusion" class="table-wrap"></div>
-      <div class="split">
-        <article id="start-here" class="panel start-here"></article>
-        <article class="panel">
-          <h2>Required phrases the bot skipped</h2>
-          <div id="missed-phrases" class="chips"></div>
-          <h2 class="subhead">Language × seriousness</h2>
-          <div id="heatmap" class="heatmap"></div>
-        </article>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Lang</th>
+              <th>Sev</th>
+              <th>Comp</th>
+              <th>Must</th>
+            </tr>
+          </thead>
+          <tbody id="example-body"></tbody>
+        </table>
       </div>
-      <article class="panel">
-        <div class="table-head">
-          <h2>Every example</h2>
-          <div class="filters">
-            <label class="sr">Filter by language <input id="filter-language" type="text" placeholder="language"/></label>
-            <label class="sr">Filter by severity <input id="filter-severity" type="text" placeholder="severity"/></label>
-            <label class="sr">Filter by tag <input id="filter-tag" type="text" placeholder="tag"/></label>
-            <label class="sr">Find an id <input id="filter-id" type="search" placeholder="golden-00"/></label>
-            <label class="check"><input id="filter-failures" type="checkbox"/> Failures only</label>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table id="example-table">
-            <thead>
-              <tr>
-                <th data-sort="id">ID</th>
-                <th data-sort="language">Lang</th>
-                <th data-sort="severity">Severity</th>
-                <th data-sort="verdict">Verdict</th>
-                <th data-sort="grade">Grade</th>
-                <th data-sort="must_mention_recall">Required</th>
-                <th data-sort="composite">Overall</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </article>
-      <aside id="inspector" class="inspector" hidden></aside>
-      <details class="panel advanced-metrics">
-        <summary>Advanced numbers</summary>
-        <p class="hint">These are the ingredients of the letter grade. You do not need them to use Studio.</p>
-        <div id="metric-table"></div>
-      </details>
-    </section>
+    </div>
+    <div class="inspect-pane" id="inspector">
+      <div class="pane-head">
+        <h2 id="inspect-title">Inspector</h2>
+        <span id="inspect-meta" class="hint"></span>
+      </div>
+      <div id="inspect-body" class="inspect-body">
+        <p class="hint">Select an example.</p>
+      </div>
+    </div>
+  </section>
 
-    <section id="view-compare" class="view" hidden data-view="compare">
-      <p class="kicker">Compare</p>
-      <h1>Did this run get better or worse?</h1>
-      <form id="compare-form" class="grade-layout">
-        <fieldset class="panel">
-          <legend>Golden set</legend>
-          <div class="choice-row">
-            <label><input type="radio" name="cmp-golden" value="sample" checked/> Bundled sample</label>
-            <label><input type="radio" name="cmp-golden" value="file"/> File</label>
-          </div>
-          <input id="cmp-golden-file" type="file" accept=".jsonl,.json,text/plain"/>
-        </fieldset>
-        <fieldset class="panel">
-          <legend>Predictions A</legend>
-          <p class="hint">Often the previous adapter, or the baseline.</p>
-          <input id="cmp-a-file" type="file" accept=".jsonl,.json,text/plain"/>
-        </fieldset>
-        <fieldset class="panel">
-          <legend>Predictions B</legend>
-          <p class="hint">The new comments you hope are better.</p>
-          <input id="cmp-b-file" type="file" accept=".jsonl,.json,text/plain"/>
-        </fieldset>
-        <div class="run-row">
-          <button class="primary" type="submit">Compare A → B</button>
-          <button class="ghost" type="button" id="compare-sample">Compare sample vs baseline</button>
-        </div>
-      </form>
-      <p class="hint">No files? Use “Compare sample vs baseline” — that is the one-click tour.</p>
-      <div id="compare-out"></div>
-    </section>
-
-    <section id="view-dataset" class="view" hidden data-view="dataset">
-      <p class="kicker">Dataset</p>
-      <h1>Is this golden set ready to grade against?</h1>
-      <p class="lede">The linter catches duplicate ids, empty diffs, and required phrases that are also banned. Warnings are suggestions, not blockers.</p>
-      <form id="lint-form" class="grade-layout">
-        <fieldset class="panel">
-          <legend>Golden JSONL</legend>
-          <div class="choice-row">
-            <label><input type="radio" name="lint-source" value="sample" checked/> Bundled sample</label>
-            <label><input type="radio" name="lint-source" value="file"/> File</label>
-            <label><input type="radio" name="lint-source" value="paste"/> Paste</label>
-          </div>
-          <input id="lint-file" type="file" accept=".jsonl,.json,text/plain" hidden/>
-          <textarea id="lint-paste" class="code-input" hidden rows="12"></textarea>
-          <p class="hint" id="lint-paste-status" hidden></p>
-          <div class="run-row">
-            <button class="primary" type="submit">Lint dataset</button>
-            <button class="ghost" type="button" id="starter-row">Insert a starter row</button>
-          </div>
-        </fieldset>
-      </form>
-      <div id="lint-out"></div>
-    </section>
-
-    <section id="view-how" class="view" hidden data-view="how">
-      <p class="kicker">How scoring works</p>
-      <h1>Plain language first, then the formula.</h1>
-      <div id="glossary" class="glossary"></div>
-      <article class="panel">
-        <h2>The overall number</h2>
-        <p>
-          Exact string match is too brittle for review comments, so Studio mixes several signals.
-          Required phrases carry more weight than word overlap, because catching the bug matters more
-          than sounding like the reference sentence.
-        </p>
-        <div id="weights" class="weights"></div>
-      </article>
-      <article class="panel">
-        <h2>What “must mention” actually does</h2>
-        <p>
-          We lowercase the comment, turn punctuation into spaces, and ask whether each required phrase
-          appears as a substring. “Expired refresh tokens” matches “this no longer rejects expired refresh tokens”.
-          It will not match a clever paraphrase that never uses those words — that is a known limit, not a secret.
-        </p>
-      </article>
-    </section>
-  </main>
-
-  <footer class="foot">
-    <p>Review Tuner Studio scores in this tab. Diffs are not uploaded. The Python CLI is optional.</p>
-    <p><a href="#/how">How scoring works</a> · <code>review-eval studio</code> ·
-      <a href="https://github.com/Sebby1770/qlora-code-review-eval-harness">GitHub</a> ·
-      <a href="https://sebby1770.github.io/qlora-code-review-eval-harness/">Live studio</a></p>
+  <footer>
+    Composite = 0.35 token F1 + 0.25 must-mention + 0.20 severity + 0.15 tag F1 + 0.05 forbidden absence.
+    A ≥ 0.90 · B ≥ 0.80 · C ≥ 0.70 · D ≥ 0.60 · else F. Gate default 0.60.
   </footer>
 
   <script src="eval-engine.js"></script>

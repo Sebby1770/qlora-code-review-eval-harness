@@ -1,94 +1,56 @@
-import json
-from pathlib import Path
-
-from review_tuner.evaluate import main
-from review_tuner.lint import lint_dataset
+from review_tuner.data import write_jsonl
+from review_tuner.lint import MIN_COMMENT_LENGTH, lint_example, lint_path, main
+from review_tuner.schema import ReviewExample
 
 
-def _row(**overrides) -> dict:
-    row = {
-        "id": "ex-1",
+def valid_row(**overrides) -> dict[str, object]:
+    record: dict[str, object] = {
+        "id": "one",
         "language": "python",
-        "file_path": "a.py",
-        "context": "ctx",
+        "file_path": "service.py",
+        "context": "A focused example.",
         "diff": "- old\n+ new",
-        "expected_comment": "please add a test",
+        "expected_comment": "Please verify the changed behavior with a regression test.",
         "severity": "medium",
         "tags": ["tests"],
-        "rubric": {"must_mention": ["test"], "avoid": ["style"]},
+        "rubric": {"must_mention": ["changed behavior"], "avoid": ["style"]},
     }
-    row.update(overrides)
-    return row
+    record.update(overrides)
+    return record
 
 
-def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows),
-        encoding="utf-8",
+def test_lint_example_flags_empty_diff_and_overlap() -> None:
+    empty = ReviewExample.from_dict(valid_row(diff="no line changes in this hunk"))
+    overlap = ReviewExample.from_dict(
+        valid_row(rubric={"must_mention": ["changed behavior"], "avoid": ["changed behavior"]})
     )
+    short = ReviewExample.from_dict(valid_row(expected_comment="Too short."))
+    missing = ReviewExample.from_dict(valid_row(rubric={}))
+
+    empty_codes = {issue.code for issue in lint_example(empty)}
+    assert "empty_diff" in empty_codes
+    assert any(issue.code == "overlapping_rubric" for issue in lint_example(overlap))
+    short_issues = lint_example(short)
+    assert any(issue.code == "short_comment" for issue in short_issues)
+    assert MIN_COMMENT_LENGTH == 40
+    assert any(issue.code == "missing_rubric" for issue in lint_example(missing))
 
 
-def test_lint_duplicate_ids(tmp_path: Path):
-    path = tmp_path / "dup.jsonl"
-    _write_jsonl(path, [_row(id="same"), _row(id="same")])
-    issues = lint_dataset(path)
-    assert any(issue.rule == "duplicate_id" and issue.level == "error" for issue in issues)
-    assert main(["lint", str(path)]) == 1
+def test_lint_path_duplicate_ids_and_parse_errors(tmp_path) -> None:
+    path = tmp_path / "golden.jsonl"
+    write_jsonl(path, [valid_row(), valid_row(id="one")])
+    issues = lint_path(path)
+    assert any(issue.code == "duplicate_id" and issue.severity == "error" for issue in issues)
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{not json}\n", encoding="utf-8")
+    parse_issues = lint_path(bad)
+    assert parse_issues[0].code == "parse_error"
+    assert main([str(bad)]) == 1
 
 
-def test_lint_empty_diff(tmp_path: Path):
-    path = tmp_path / "empty_diff.jsonl"
-    _write_jsonl(path, [_row(diff="   ")])
-    issues = lint_dataset(path)
-    assert any(issue.rule == "empty_diff" and issue.level == "error" for issue in issues)
-    assert main(["lint", str(path)]) == 1
-
-
-def test_lint_empty_comment(tmp_path: Path):
-    path = tmp_path / "empty_comment.jsonl"
-    _write_jsonl(path, [_row(expected_comment="")])
-    issues = lint_dataset(path)
-    assert any(issue.rule == "empty_comment" and issue.level == "error" for issue in issues)
-    assert main(["lint", str(path)]) == 1
-
-
-def test_lint_must_mention_also_in_avoid(tmp_path: Path):
-    path = tmp_path / "overlap.jsonl"
-    _write_jsonl(
-        path,
-        [_row(rubric={"must_mention": ["style"], "avoid": ["style"]})],
-    )
-    issues = lint_dataset(path)
-    assert any(
-        issue.rule == "must_mention_in_avoid" and issue.level == "error" for issue in issues
-    )
-    assert main(["lint", str(path)]) == 1
-
-
-def test_lint_unknown_severity(tmp_path: Path):
-    path = tmp_path / "sev.jsonl"
-    _write_jsonl(path, [_row(severity="critical")])
-    issues = lint_dataset(path)
-    assert any(issue.rule == "unknown_severity" and issue.level == "error" for issue in issues)
-    assert main(["lint", str(path)]) == 1
-
-
-def test_lint_warnings_only_exit_zero(tmp_path: Path):
-    path = tmp_path / "warn.jsonl"
-    _write_jsonl(
-        path,
-        [
-            _row(
-                tags=[],
-                rubric={"must_mention": [], "avoid": ["style"]},
-            )
-        ],
-    )
-    issues = lint_dataset(path)
-    assert issues
-    assert all(issue.level == "warning" for issue in issues)
-    assert main(["lint", str(path)]) == 0
-
-
-def test_golden_set_lints_clean():
-    assert main(["lint", "data/golden/code_review_golden.jsonl"]) == 0
+def test_lint_clean_file_is_ok(tmp_path) -> None:
+    path = tmp_path / "golden.jsonl"
+    write_jsonl(path, [valid_row()])
+    assert main([str(path)]) == 0
+    assert main(["--json", str(path)]) == 0

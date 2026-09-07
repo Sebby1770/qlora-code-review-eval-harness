@@ -1,123 +1,162 @@
-import statistics
-
 from review_tuner.metrics import (
-    aggregate_scores,
+    ScoreWeights,
     bleu_lite,
-    bootstrap_ci,
-    error_analysis,
+    extend_score,
+    f1_for_sets,
+    forbidden_rate,
     infer_severity,
     length_ratio,
-    render_html_report,
+    missed_phrases,
+    normalize_text,
+    phrase_recall,
     rouge_l_lite,
     score_example,
+    security_fail,
     token_f1,
 )
 from review_tuner.schema import Prediction, ReviewExample
 
 
-def _ex(**kwargs):
-    base = dict(
-        id="x",
-        diff="diff",
-        file_path="a.py",
+def test_token_f1_rewards_overlap() -> None:
+    assert token_f1("restore the expires_at check", "please restore expires_at validation") > 0.4
+    assert token_f1("completely different", "please restore expires_at validation") == 0.0
+
+
+def test_phrase_recall_counts_required_phrases() -> None:
+    assert phrase_recall("Please restore the expires_at check.", ("expires_at check",)) == 1.0
+    assert phrase_recall("Please restore validation.", ("expires_at check",)) == 0.0
+
+
+def test_score_example_combines_rubric_and_metadata() -> None:
+    golden = ReviewExample(
+        id="golden",
+        diff="- expired check\n+ no check",
+        file_path="auth.py",
         language="python",
-        context="ctx",
-        target_comment="please add a test for expired tokens",
+        context="Refresh token flow.",
+        target_comment="Restore the expires_at check and add a regression test.",
         severity="high",
         tags=("security", "tests"),
-        must_mention=("expired tokens", "test"),
-        avoid=("style",),
+        must_mention=("expires_at check", "regression test"),
     )
-    base.update(kwargs)
-    return ReviewExample(**base)
-
-
-def test_infer_severity_uses_stable_order():
-    assert infer_severity("Please treat this as blocker severity, not a nit") == "blocker"
-    assert infer_severity("[high] missing authz") == "high"
-    assert infer_severity("nit severity only") == "nit"
-
-
-def test_token_f1_identical():
-    assert token_f1("hello world", "hello world") == 1.0
-
-
-def test_bleu_and_rouge_positive():
-    pred = "please restore the expires_at check and add a regression test"
-    ref = "please restore the expires_at check and add a regression test for expired tokens"
-    assert bleu_lite(pred, ref) > 0.3
-    assert rouge_l_lite(pred, ref) > 0.3
-    assert 0.0 < length_ratio(pred, ref) <= 1.0
-
-
-def test_score_example_composite_bounds():
-    golden = _ex()
-    pred = Prediction(
-        id="x",
-        prediction="Please restore expired tokens validation and add a test.",
+    prediction = Prediction(
+        id="golden",
+        prediction="Restore the expires_at check and add a regression test.",
         severity="high",
         tags=("security", "tests"),
     )
-    score = score_example(golden, pred)
-    assert 0.0 <= score.composite <= 1.0
-    assert score.bleu_lite >= 0.0
-    assert score.rouge_l >= 0.0
-    agg = aggregate_scores([score])
-    assert agg["count"] == 1
-    assert "by_language" in agg
-    assert "python" in agg["by_language"]
-    assert "composite_ci" in agg
-    assert agg["composite_ci_lo"] <= score.composite <= agg["composite_ci_hi"]
+
+    score = score_example(golden, prediction)
+
+    assert score.must_mention_recall == 1.0
+    assert score.severity_accuracy == 1.0
+    assert score.tag_f1 == 1.0
+    assert score.composite > 0.9
 
 
-def test_bootstrap_ci_seeded_contains_mean():
-    values = [0.1, 0.2, 0.3, 0.4, 0.5]
-    lo, hi = bootstrap_ci(values, n=500, seed=0)
-    mean = statistics.fmean(values)
-    assert lo <= mean <= hi
-    assert bootstrap_ci(values, n=500, seed=0) == (lo, hi)
-    spread = [0.0, 1.0] * 20
-    wide_lo, wide_hi = bootstrap_ci(spread, n=500, seed=0)
-    assert wide_lo < wide_hi
-    assert wide_lo <= statistics.fmean(spread) <= wide_hi
-
-
-def test_error_analysis_counts_misses_hits_and_confusion():
-    golden = _ex(
-        must_mention=("expired tokens", "test"),
-        avoid=("style",),
-        severity="high",
-    )
-    pred = Prediction(
-        id="x",
-        prediction="please change the style of this function",
-        severity="low",
-        tags=(),
-    )
-    score = score_example(golden, pred)
-    analysis = error_analysis([score], [golden])
-    missed = {row["phrase"]: row["count"] for row in analysis["most_missed_must_mention"]}
-    assert missed["expired tokens"] == 1
-    assert missed["test"] == 1
-    hits = {row["phrase"]: row["count"] for row in analysis["forbidden_phrase_hits"]}
-    assert hits["style"] == 1
-    assert any(
-        row["predicted"] == "low" and row["gold"] == "high"
-        for row in analysis["severity_confusion"]
-    )
-
-
-def test_html_report_contains_composite_and_example_id():
-    golden = _ex()
-    pred = Prediction(
-        id="x",
-        prediction="Please restore expired tokens validation and add a test.",
+def test_fused_score_path_matches_public_metric_contract() -> None:
+    golden = ReviewExample(
+        id="golden",
+        diff="+ changed",
+        file_path="service.py",
+        language="python",
+        context="Context.",
+        target_comment="Check token expiry before updating state.",
         severity="high",
         tags=("security", "tests"),
+        must_mention=("token expiry", "updating state"),
+        avoid=("style only", "rename this"),
     )
-    score = score_example(golden, pred)
-    aggregate = aggregate_scores([score])
-    analysis = error_analysis([score], [golden])
-    html = render_html_report(aggregate, [score.as_dict()], analysis)
-    assert "composite" in html.lower()
-    assert "x" in html
+    prediction = Prediction(
+        id="golden",
+        prediction="Severity high: check token expiry before updating state, not style only.",
+        tags=("security",),
+    )
+
+    score = score_example(golden, prediction)
+
+    assert score.exact_match == float(
+        normalize_text(prediction.prediction) == normalize_text(golden.target_comment)
+    )
+    assert score.token_f1 == token_f1(prediction.prediction, golden.target_comment)
+    assert score.must_mention_recall == phrase_recall(
+        prediction.prediction, golden.must_mention
+    )
+    assert score.forbidden_rate == forbidden_rate(prediction.prediction, golden.avoid)
+    assert score.severity_accuracy == float(
+        infer_severity(prediction.prediction) == golden.severity
+    )
+    assert score.tag_f1 == f1_for_sets(prediction.tags, golden.tags)
+
+
+def test_severity_inference_is_deterministic_when_multiple_labels_appear() -> None:
+    assert infer_severity("[low] This is actually [blocker].") == "blocker"
+
+
+def test_score_weights_are_validated_and_reusable() -> None:
+    custom = ScoreWeights(
+        token_f1=1.0,
+        must_mention_recall=0.0,
+        severity_accuracy=0.0,
+        tag_f1=0.0,
+        forbidden_absence=0.0,
+    )
+    golden = ReviewExample(
+        id="golden",
+        diff="+ changed",
+        file_path="service.py",
+        language="python",
+        context="Context.",
+        target_comment="exact target",
+    )
+    prediction = Prediction(id="golden", prediction="different target")
+
+    assert score_example(golden, prediction, weights=custom).composite == token_f1(
+        "different target",
+        "exact target",
+    )
+
+
+def test_example_score_as_dict_keys_stay_stable() -> None:
+    golden = ReviewExample(
+        id="golden",
+        diff="+ changed",
+        file_path="service.py",
+        language="python",
+        context="Context.",
+        target_comment="Check token expiry before updating state.",
+        severity="high",
+        tags=("security",),
+        must_mention=("token expiry",),
+    )
+    prediction = Prediction(id="golden", prediction="Looks fine to me.")
+    score = score_example(golden, prediction)
+    extended = extend_score(golden, prediction, score)
+
+    assert set(score.as_dict()) == {
+        "id",
+        "exact_match",
+        "token_f1",
+        "must_mention_recall",
+        "forbidden_rate",
+        "severity_accuracy",
+        "tag_f1",
+        "composite",
+    }
+    assert extended.as_dict() == score.as_dict()
+    assert extended.security_fail == 1.0
+    assert extended.missed_must_mention == ("token expiry",)
+
+
+def test_additive_lexical_metrics_and_security_fail() -> None:
+    assert bleu_lite("the cat sat", "the cat sat") == 1.0
+    assert rouge_l_lite("the cat sat", "the cat sat") == 1.0
+    assert length_ratio("the cat sat", "the cat sat") == 1.0
+    assert bleu_lite("", "hello") == 0.0
+    assert rouge_l_lite("", "hello") == 0.0
+    assert security_fail("high", 0.5) == 1.0
+    assert security_fail("high", 1.0) == 0.0
+    assert security_fail("low", 0.0) == 0.0
+    assert missed_phrases("restore validation", ("expires_at check", "validation")) == (
+        "expires_at check",
+    )

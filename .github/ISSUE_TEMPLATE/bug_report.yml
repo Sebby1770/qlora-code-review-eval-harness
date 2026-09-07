@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible harness, data, training, or evaluation problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Include the command, minimal sanitized input, and observed output.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Python and platform
+      placeholder: Python 3.11, Ubuntu 24.04, CUDA 12.x
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: Checks
+      options:
+        - label: I removed secrets, private code, model weights, and sensitive datasets.
+          required: true
+        - label: I ran `make verify` or explained why it cannot run.
+          required: true

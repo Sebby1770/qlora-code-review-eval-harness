@@ -1,102 +1,97 @@
 # Changelog
 
-## [0.7.0] — 2026-08-31
+All notable changes to this project will be documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.9.0] - 2026-09-07
 
 ### Added
-- GitHub Pages studio at https://sebby1770.github.io/qlora-code-review-eval-harness/ (client-side scorer, sample/baseline, HTML/badge download).
-- Static eval engine fills tag averages and compare newly-caught / newly-missed flips.
 
-## [0.6.1] — 2026-08-31
+- Studio auto-loads the sample run, with language/severity filters, a per-example
+  score waterfall, severity confusion matrix, copy-summary, and download-JSON.
+- In-browser bootstrap 95% CI (mulberry32, seed 1337) so GitHub Pages shows a band
+  without Python.
 
-### Changed
-- README clone URL and version so GitHub `main` is the studio product.
-
-## [0.6.0] — 2026-08-31
+## [0.8.0] - 2026-09-07
 
 ### Added
-- SVG grade badge (`GET /api/badge`, `POST /api/badge`) and Download badge
-- Histogram bars, sortable example table, id search, heatmap click-to-filter
-- Severity confusion table on the results page
-- `?` keyboard cheat sheet
-- Dataset “Insert a starter row”
-- Last eval payload remembered for HTML/badge download in the same session
+
+- Unified `review-eval` CLI with `eval`, `baseline`, `compare`, `lint`, `slices`,
+  `studio`, and `report` subcommands. Legacy `review-eval --golden ...` still works.
+- Local static studio (`review-eval studio`) with an in-browser scorer that matches
+  the Python composite weights, sample JSONL, J/K inspector, and optional compare.
+- Additive metrics: BLEU-lite, ROUGE-L-lite, length ratio, and security-fail.
+- Aggregate extras: language/severity/tag slices, bootstrap 95% CI (seed 1337),
+  letter grade A–F, and pass/weak/fail against a 0.60 threshold.
+- Markdown and HTML evaluation reports (`--report-md`, `--report-html`).
+- Dataset linter for duplicate ids, empty diffs, missing rubrics, short comments,
+  and overlapping must_mention/avoid phrases.
+- Prediction comparer that prints newly caught / newly missed / Δ composite.
+- Expanded golden set to 12 examples (Python, TypeScript, Go, Rust, Java, Ruby)
+  including cases the heuristic baseline should miss.
+- Makefile targets `studio`, `lint-data`, and `compare-smoke`.
 
 ### Changed
-- Version **0.6.0**
 
-## [0.5.0] — 2026-08-31
+- Package version is `0.8.0`.
+- `review-eval` console script now points at `review_tuner.cli:main`.
+- README leads with the studio and CI gate; GPU training is optional.
+- Smoke eval also writes Markdown and HTML into `reports/`.
+
+### Fixed
+
+- Public `ExampleScore.as_dict` keys and `heuristic_prediction` behavior are
+  unchanged; extra metrics sit beside that contract.
+
+## [0.1.0]
 
 ### Added
-- Guide page (`/#/guide`) for first-time users
-- Letter-grade histogram and mean composite by golden tag
-- Live pass-gate slider on the results page (no re-score)
-- Light “paper” theme, persisted in localStorage
-- Paste JSONL row counter / parse error before grading
-- Shared-word list in the example inspector
-- `POST /api/report-html` plus Download HTML report
-- Last-five run history on Home (session only)
+
+- Immutable, validated configuration models shared by training and inference.
+- Lazy JSONL readers, atomic JSON/JSONL writers, and typed package metadata.
+- Batched inference with explicit input and output token budgets.
+- Constant-memory online aggregation for evaluation metrics.
+- Validated composite score weights and a reusable prediction serialization helper.
+- Strict typing, expanded schema/evaluation tests, and GitHub Actions verification.
+- `@Sebby1770` code ownership and grouped Dependabot updates.
+- Contribution, security, pull-request, and structured bug-report guidance.
+- Coverage and package-build gates for release verification.
+- A model-agnostic inference core with fake-runtime tests for batching and output ordering.
+- A repeatable synthetic evaluation-throughput benchmark.
+- Isolated built-wheel installation and published-entry-point smoke verification.
 
 ### Changed
-- Version **0.5.0**
 
-## [0.4.1] — 2026-08-31
+- Evaluation now requires an exact one-to-one match between golden and prediction IDs.
+- Training datasets stream into Arrow-backed datasets instead of first becoming Python lists.
+- Review context and diffs are serialized as explicitly untrusted JSON prompt data.
+- Quantization defaults and optional-dependency errors have one source of truth.
+- Severity labels now have one canonical ordering shared by schema validation and metrics.
+- Package version metadata now derives from the runtime `__version__` source.
+- Licensing metadata uses the current SPDX format supported by setuptools.
+- The enforced test coverage floor increased from 65% to 75%.
+- Per-example scoring now reuses normalized text and avoids reflective metric aggregation
+  in the hot path.
 
-### Added
-- Studio shortcuts: POST `"golden": "sample"` and `"predictions": "sample"|"baseline"`
-- Dataset coverage map (language / severity / tag) on the lint API and Dataset page
-- Inspector phrase highlighting, previous/next, and J/K/Esc keyboard navigation
-- Copy English summary, download run JSON, toasts instead of `alert`
-- Compare: click a flipped example to read A vs B comments
-- Tag filter on the results table
+### Fixed
 
-### Changed
-- Version **0.4.1**
-- Home doors and forms talk to the sample/baseline tokens so the UI does less file shuffling
+- Prevented malformed strings and nulls from silently becoming invalid tag/rubric sequences.
+- Prevented stale or duplicate records from producing credible-looking evaluation reports.
+- Prevented failed generation or alignment checks from replacing existing reports.
+- Prevented baseline-output options from consuming supplied prediction iterators.
+- Prevented non-4-bit training from constructing bitsandbytes configuration or running
+  k-bit-only model preparation.
+- Prevented multi-label severity prose from resolving nondeterministically.
+- Prevented generation from reaching Transformers without a usable padding token id.
 
-## [0.4.0] — 2026-08-31
+### Security
 
-### Added
-- **Review Tuner Studio** — local stdlib HTTP app (`review-eval studio`) with a designed frontend
-- Guided sample / baseline / upload grading, example inspector, heatmap, compare, and dataset linter
-- Shared eval view model: letter grade, Pass/Weak/Fail, English story, score waterfall
-- HTML reports include a no-JS example inspector (diff, expected comment, bot comment, phrase chips)
-- `--include-text` on `review-eval eval` for diffs/comments in the per-example JSONL
-- Bundled studio samples so the UI works without extra files
+- Added strict configuration and dataset validation before expensive model work begins.
+- Isolated untrusted diff/context content from model instructions.
 
-### Changed
-- Version **0.4.0**
-- Severity inference uses a stable label order (`blocker` → `nit`) instead of set iteration
-- Aggregate JSON reports include `letter_grade` and `story`
-
-## [0.3.0] — 2026-08-18
-
-### Added
-- Error analysis: most-missed `must_mention` phrases, forbidden-phrase hits, severity confusion
-- Deterministic bootstrap 95% CI on the aggregate composite score
-- Self-contained HTML reports (`--report-html`)
-- Optional JSON report copy (`--report-json`)
-- `review-eval lint` dataset linter (duplicate ids, empty diff/comment, must_mention∩avoid, unknown severity)
-- `review-eval dashboard` static index for a reports directory
-- Stronger deterministic baseline that mentions deleted-line identifiers
-- Six golden examples (`golden-010`–`golden-015`): SQL injection, N+1, missing authz, timezone/DST, resource leak, flaky test
-
-### Changed
-- Version **0.3.0**
-- Markdown reports include CI, error analysis, and worst-example ranking
-- Golden set expanded from 9 to 15 examples
-
-## [0.2.0] — 2026-07-24
-
-### Added
-- Subcommands: `eval`, `compare`, `baseline`, `validate`
-- Markdown reports (`--report-md`)
-- Prediction comparison with metric deltas
-- BLEU-lite and ROUGE-L-lite metrics, length ratio
-- Aggregate breakdowns by language and severity
-- Golden filters: `--language`, `--severity`, `--tag`
-- Expanded golden set (9 examples)
-- GitHub Actions CI (pytest, ruff, smoke eval)
-
-### Changed
-- Version **0.2.0**
-- Composite score incorporates n-gram and length signals
+[Unreleased]: https://github.com/Sebby1770/qlora-code-review-eval-harness/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Sebby1770/qlora-code-review-eval-harness/compare/v0.1.0...v0.8.0
+[0.1.0]: https://github.com/Sebby1770/qlora-code-review-eval-harness/releases/tag/v0.1.0

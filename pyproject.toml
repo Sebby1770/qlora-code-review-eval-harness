@@ -1,20 +1,19 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "review-tuner"
-version = "0.7.0"
-description = "QLoRA fine-tuning, golden-set evaluation, and a local studio for grading code-review comments."
+dynamic = ["version"]
+description = "Golden-set evaluation harness, local studio, and optional QLoRA training for code review comment models."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Sebastian Forbes" }]
 keywords = ["qlora", "llm", "code-review", "evaluation", "peft"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -22,10 +21,20 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/Sebby1770/qlora-code-review-eval-harness"
+Repository = "https://github.com/Sebby1770/qlora-code-review-eval-harness"
+Issues = "https://github.com/Sebby1770/qlora-code-review-eval-harness/issues"
+Changelog = "https://github.com/Sebby1770/qlora-code-review-eval-harness/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = [
+  "build>=1.2.1",
+  "mypy>=1.10.0",
   "pytest>=8.0",
+  "pytest-cov>=5.0.0",
   "ruff>=0.5.0",
+  "twine>=5.0.0",
 ]
 train = [
   "accelerate>=0.34.0",
@@ -43,18 +52,22 @@ eval-embeddings = [
 
 [project.scripts]
 review-train-qlora = "review_tuner.train_qlora:main"
-review-eval = "review_tuner.evaluate:main"
+review-eval = "review_tuner.cli:main"
 review-infer = "review_tuner.infer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-review_tuner = ["studio_web/*", "studio_web/samples/*"]
+review_tuner = ["py.typed", "studio_web/*", "studio_web/**/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "review_tuner.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=review_tuner --cov-report=term-missing --cov-fail-under=75"
 
 [tool.ruff]
 line-length = 100
@@ -62,3 +75,9 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"
+packages = ["review_tuner"]

@@ -31,9 +31,7 @@ jobs:
              src/review_tuner/studio_web/eval-engine.js \
              src/review_tuner/studio_web/404.html \
              _site/
-          cp src/review_tuner/studio_web/samples/golden.jsonl \
-             src/review_tuner/studio_web/samples/predictions.sample.jsonl \
-             _site/samples/
+          cp src/review_tuner/studio_web/samples/*.jsonl _site/samples/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

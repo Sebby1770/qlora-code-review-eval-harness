@@ -1,209 +1,214 @@
-"""Dataset linter for golden and training JSONL files."""
+"""Dataset quality checks for golden and training JSONL files."""
 
 from __future__ import annotations
 
+import argparse
 import json
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from review_tuner.schema import VALID_SEVERITIES
+from review_tuner.data import iter_jsonl
+from review_tuner.metrics import missed_phrases, normalize_text
+from review_tuner.schema import DatasetError, ReviewExample
+
+MIN_COMMENT_LENGTH = 40
+ERROR = "error"
+WARNING = "warning"
 
 
 @dataclass(frozen=True)
 class LintIssue:
-    """One linter finding."""
+    """One dataset quality finding."""
 
-    level: str
-    rule: str
+    path: str
+    row_number: int | None
+    example_id: str | None
+    code: str
     message: str
-    example_id: str | None = None
-    row: int | None = None
+    severity: str
 
     def format(self) -> str:
-        location = []
-        if self.row is not None:
-            location.append(f"row {self.row}")
-        if self.example_id:
-            location.append(self.example_id)
-        prefix = f"{':'.join(location)}: " if location else ""
-        return f"{self.level}: {prefix}{self.message}"
+        location = self.path
+        if self.row_number is not None:
+            location = f"{location}:{self.row_number}"
+        identity = f" [{self.example_id}]" if self.example_id else ""
+        return f"{location}{identity} {self.severity} {self.code}: {self.message}"
 
 
-def _as_phrases(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip().lower() for item in value if str(item).strip()]
+def _diff_has_changes(diff: str) -> bool:
+    for line in diff.splitlines():
+        if line.startswith(("+++", "---")):
+            continue
+        if line.startswith(("+", "-")):
+            return True
+    return False
 
 
-def lint_records(records: list[tuple[int, dict]]) -> list[LintIssue]:
-    """Lint already-parsed JSON objects. ``records`` is ``(row_number, object)``."""
+def lint_example(
+    example: ReviewExample, *, path: str = "", row_number: int | None = None
+) -> list[LintIssue]:
+    """Return quality issues for one already-validated example."""
 
     issues: list[LintIssue] = []
-    seen_ids: dict[str, int] = {}
-    for row_number, raw in records:
-        example_id = str(raw.get("id") or "").strip() or None
 
-        if not example_id:
-            issues.append(
-                LintIssue("error", "missing_id", "missing id", row=row_number)
+    def add(code: str, message: str, severity: str = WARNING) -> None:
+        issues.append(
+            LintIssue(
+                path=path,
+                row_number=row_number,
+                example_id=example.id,
+                code=code,
+                message=message,
+                severity=severity,
             )
-        elif example_id in seen_ids:
-            issues.append(
-                LintIssue(
-                    "error",
-                    "duplicate_id",
-                    f"duplicate id (first seen on row {seen_ids[example_id]})",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-        else:
-            seen_ids[example_id] = row_number
+        )
 
-        diff = str(raw.get("diff") or "")
-        if not diff.strip():
-            issues.append(
-                LintIssue(
-                    "error",
-                    "empty_diff",
-                    "empty diff",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
-        comment = raw.get("review_comment", raw.get("expected_comment", ""))
-        if not str(comment or "").strip():
-            issues.append(
-                LintIssue(
-                    "error",
-                    "empty_comment",
-                    "empty comment",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
-        if "severity" in raw:
-            severity = str(raw.get("severity") or "").strip().lower()
-            if severity not in VALID_SEVERITIES:
-                issues.append(
-                    LintIssue(
-                        "error",
-                        "unknown_severity",
-                        f"unknown severity {severity!r}; "
-                        f"expected one of {sorted(VALID_SEVERITIES)}",
-                        example_id=example_id,
-                        row=row_number,
-                    )
-                )
-        else:
-            issues.append(
-                LintIssue(
-                    "warning",
-                    "missing_severity",
-                    "missing severity; default is medium",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
-        rubric = raw.get("rubric") or {}
-        if rubric and not isinstance(rubric, dict):
-            issues.append(
-                LintIssue(
-                    "error",
-                    "invalid_rubric",
-                    "rubric must be an object",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-            must: list[str] = []
-            avoid: list[str] = []
-        else:
-            must = _as_phrases((rubric or {}).get("must_mention", []))
-            avoid = _as_phrases((rubric or {}).get("avoid", []))
-
-        avoid_set = set(avoid)
-        for phrase in must:
-            if phrase in avoid_set:
-                issues.append(
-                    LintIssue(
-                        "error",
-                        "must_mention_in_avoid",
-                        f"must_mention phrase {phrase!r} is also listed in avoid",
-                        example_id=example_id,
-                        row=row_number,
-                    )
-                )
-
-        if not must:
-            issues.append(
-                LintIssue(
-                    "warning",
-                    "empty_must_mention",
-                    "rubric.must_mention is empty",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
-        tags = raw.get("tags") or []
-        if not tags:
-            issues.append(
-                LintIssue(
-                    "warning",
-                    "empty_tags",
-                    "tags are empty",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
-        if not str(raw.get("context") or "").strip():
-            issues.append(
-                LintIssue(
-                    "warning",
-                    "empty_context",
-                    "empty context",
-                    example_id=example_id,
-                    row=row_number,
-                )
-            )
-
+    if not _diff_has_changes(example.diff):
+        add("empty_diff", "diff has no added or removed lines", ERROR)
+    if not example.must_mention and not example.avoid:
+        add("missing_rubric", "rubric has no must_mention or avoid phrases")
+    comment = example.target_comment.strip()
+    if len(comment) < MIN_COMMENT_LENGTH:
+        add(
+            "short_comment",
+            f"review comment is {len(comment)} characters; need at least {MIN_COMMENT_LENGTH}",
+        )
+    overlap = sorted(set(example.must_mention) & set(example.avoid))
+    if overlap:
+        add(
+            "overlapping_rubric",
+            "must_mention and avoid share phrases: " + ", ".join(overlap),
+            ERROR,
+        )
+    missing_from_target = missed_phrases(example.target_comment, example.must_mention)
+    if missing_from_target:
+        add(
+            "rubric_not_in_target",
+            "must_mention phrases missing from the target comment: "
+            + ", ".join(missing_from_target),
+        )
+    avoid_in_target = [
+        phrase
+        for phrase in example.avoid
+        if normalize_text(phrase) in normalize_text(example.target_comment)
+    ]
+    if avoid_in_target:
+        add(
+            "avoid_in_target",
+            "avoid phrases appear in the target comment: " + ", ".join(avoid_in_target),
+        )
     return issues
 
 
-def lint_dataset(path: str | Path) -> list[LintIssue]:
-    """Lint a JSONL dataset and return errors plus warnings."""
+def lint_path(path: str | Path) -> list[LintIssue]:
+    """Lint one JSONL file, including parse errors and duplicate ids."""
 
-    path = Path(path)
+    source = Path(path)
     issues: list[LintIssue] = []
-    records: list[tuple[int, dict]] = []
+    seen: dict[str, int] = {}
+    try:
+        rows = list(enumerate(iter_jsonl(source), start=1))
+    except DatasetError as exc:
+        return [
+            LintIssue(
+                path=str(source),
+                row_number=None,
+                example_id=None,
+                code="parse_error",
+                message=str(exc),
+                severity=ERROR,
+            )
+        ]
 
-    with path.open("r", encoding="utf-8") as handle:
-        for row_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                value = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                issues.append(
-                    LintIssue("error", "invalid_json", f"invalid JSON: {exc}", row=row_number)
-                )
-                continue
-            if not isinstance(value, dict):
-                issues.append(
-                    LintIssue("error", "invalid_json", "expected a JSON object", row=row_number)
-                )
-                continue
-            records.append((row_number, value))
+    if not rows:
+        issues.append(
+            LintIssue(
+                path=str(source),
+                row_number=None,
+                example_id=None,
+                code="empty_dataset",
+                message="dataset contains no records",
+                severity=ERROR,
+            )
+        )
+        return issues
 
-    issues.extend(lint_records(records))
+    for row_number, record in rows:
+        try:
+            example = ReviewExample.from_dict(record, row_number=row_number)
+        except DatasetError as exc:
+            issues.append(
+                LintIssue(
+                    path=str(source),
+                    row_number=row_number,
+                    example_id=str(record["id"]) if isinstance(record.get("id"), str) else None,
+                    code="parse_error",
+                    message=str(exc),
+                    severity=ERROR,
+                )
+            )
+            continue
+        previous = seen.get(example.id)
+        if previous is not None:
+            issues.append(
+                LintIssue(
+                    path=str(source),
+                    row_number=row_number,
+                    example_id=example.id,
+                    code="duplicate_id",
+                    message=f"id already appeared on row {previous}",
+                    severity=ERROR,
+                )
+            )
+        else:
+            seen[example.id] = row_number
+        issues.extend(lint_example(example, path=str(source), row_number=row_number))
     return issues
 
 
-def lint_has_errors(issues: list[LintIssue]) -> bool:
-    return any(issue.level == "error" for issue in issues)
+def lint_paths(paths: Sequence[str | Path]) -> list[LintIssue]:
+    """Lint many JSONL files in the given order."""
+
+    issues: list[LintIssue] = []
+    for path in paths:
+        issues.extend(lint_path(path))
+    return issues
+
+
+def _has_errors(issues: Sequence[LintIssue]) -> bool:
+    return any(issue.severity == ERROR for issue in issues)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="review-eval lint",
+        description="Check review JSONL datasets for duplicates, empty diffs, and rubric issues.",
+    )
+    parser.add_argument("paths", nargs="+", help="JSONL files to lint.")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat warnings as errors.",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable findings.")
+    args = parser.parse_args(argv)
+    issues = lint_paths(args.paths)
+    if args.json:
+        print(json.dumps([asdict(issue) for issue in issues], indent=2, sort_keys=True))
+    else:
+        if not issues:
+            print(f"ok: {len(args.paths)} file(s), no issues")
+        else:
+            for issue in issues:
+                print(issue.format())
+            errors = sum(1 for issue in issues if issue.severity == ERROR)
+            warnings = len(issues) - errors
+            print(f"{errors} error(s), {warnings} warning(s)")
+    if _has_errors(issues) or (args.strict and issues):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
