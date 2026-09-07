@@ -33,7 +33,7 @@ def test_studio_server_serves_index_and_samples() -> None:
         server.server_close()
         thread.join(timeout=2)
 
-    assert "Night Desk" in homepage
+    assert "Cyanotype" in homepage
     assert "0.35" in engine
     assert "golden-001" in sample
 

@@ -6,6 +6,13 @@ All notable changes to this project will be documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-08
+
+### Changed
+
+- Studio frontend is now the Cyanotype print lab: Prussian-blue sun-print stage,
+  circular exposure meter, glass-plate drop zones, and contact-sheet inspector.
+
 ## [0.9.0] - 2026-09-07
 
 ### Added

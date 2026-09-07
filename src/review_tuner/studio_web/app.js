@@ -96,6 +96,45 @@
     );
   }
 
+  const KARAT = { A: "24K wash", B: "18K wash", C: "14K wash", D: "10K wash", F: "unfixed plate" };
+
+  function paintPrintBed(aggregate) {
+    const canvas = document.getElementById("print-bed");
+    if (!canvas || !aggregate) return;
+    const ctx = canvas.getContext("2d");
+    const size = canvas.width;
+    const score = Math.max(0, Math.min(1, Number(aggregate.composite) || 0));
+    ctx.clearRect(0, 0, size, size);
+    const wash = ctx.createRadialGradient(size * 0.5, size * 0.42, 12, size * 0.5, size * 0.5, size * 0.5);
+    wash.addColorStop(0, "rgba(232, 241, 255," + (0.18 + score * 0.45) + ")");
+    wash.addColorStop(0.45, "rgba(10, 42, 92, 0.95)");
+    wash.addColorStop(1, "rgba(6, 24, 51, 1)");
+    ctx.fillStyle = wash;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(244, 211, 94, 0.55)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 8, 0, Math.PI * 2);
+    ctx.stroke();
+    const rings = 5;
+    ctx.strokeStyle = "rgba(232, 241, 255, 0.12)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= rings; i += 1) {
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, ((size / 2 - 18) * i) / rings, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const sweep = score * Math.PI * 2;
+    ctx.strokeStyle = aggregate.letter_grade === "F" ? "#ef6f6c" : "#7dcec4";
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 22, -Math.PI / 2, -Math.PI / 2 + sweep);
+    ctx.stroke();
+  }
+
   function renderHero(aggregate) {
     els.hero.classList.remove("hidden");
     els.grade.textContent = aggregate.letter_grade;
@@ -103,8 +142,11 @@
     els.composite.textContent = "composite " + fmt(aggregate.composite, 4);
     els.gate.textContent = aggregate.gate;
     els.gate.className = "chip " + aggregate.gate;
-    els.count.textContent = aggregate.count + " examples";
+    els.count.textContent = aggregate.count + " plates";
     els.summary.textContent = aggregate.summary;
+    const karat = document.getElementById("karat-label");
+    if (karat) karat.textContent = KARAT[aggregate.letter_grade] || "exposed";
+    paintPrintBed(aggregate);
   }
 
   function renderMetrics(aggregate) {

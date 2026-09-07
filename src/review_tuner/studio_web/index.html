@@ -3,24 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Night Desk — Review Tuner</title>
+  <title>Cyanotype — Review Tuner</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Newsreader:opsz,wght@6..72,500;6..72,700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="sun-lamp" aria-hidden="true"></div>
+  <div class="blueprint-grid" aria-hidden="true"></div>
   <header class="top">
     <div class="brand">
-      <span class="mark">RT</span>
+      <span class="mark">Cy</span>
       <div>
-        <h1>The Night Desk</h1>
-        <p>Late-shift review court. Drop case files. The house scores them like a mean editor.</p>
+        <h1>Cyanotype</h1>
+        <p>Review Tuner sun-print lab. Drop plates. Expose the bot. The wash grades it in Prussian blue.</p>
       </div>
     </div>
     <div class="top-actions">
-      <button type="button" id="sample-btn">Try the sample</button>
-      <button type="button" id="baseline-btn" class="ghost">Score heuristic baseline</button>
-      <button type="button" id="copy-summary" class="ghost">Copy summary</button>
+      <button type="button" id="sample-btn">Expose the sample</button>
+      <button type="button" id="baseline-btn" class="ghost">Heuristic plate</button>
+      <button type="button" id="copy-summary" class="ghost">Copy wash notes</button>
       <button type="button" id="download-json" class="ghost">Download JSON</button>
     </div>
   </header>
@@ -28,25 +31,29 @@
   <section class="drop-row" id="drop-row">
     <label class="drop" id="golden-drop">
       <input type="file" id="golden-file" accept=".jsonl,application/jsonl,text/plain">
-      <strong>Golden JSONL</strong>
-      <span id="golden-name">Drop or choose a file</span>
+      <strong>Golden plate</strong>
+      <span id="golden-name">Drop or choose a JSONL</span>
     </label>
     <label class="drop" id="pred-drop">
       <input type="file" id="pred-file" accept=".jsonl,application/jsonl,text/plain">
-      <strong>Predictions JSONL</strong>
-      <span id="pred-name">Drop or choose a file</span>
+      <strong>Prediction plate</strong>
+      <span id="pred-name">Drop or choose a JSONL</span>
     </label>
     <label class="drop optional" id="pred-b-drop">
       <input type="file" id="pred-b-file" accept=".jsonl,application/jsonl,text/plain">
-      <strong>Compare (optional)</strong>
-      <span id="pred-b-name">Second prediction file</span>
+      <strong>Compare plate</strong>
+      <span id="pred-b-name">Optional second print</span>
     </label>
   </section>
 
-  <p class="status" id="status">Load files or try the sample to score a review bot.</p>
+  <p class="status" id="status">Load plates or expose the sample. The sun-print scores a review bot in the browser.</p>
 
   <section class="hero hidden" id="hero">
-    <div class="grade" id="grade">–</div>
+    <div class="print-stage">
+      <canvas id="print-bed" width="420" height="420" aria-hidden="true"></canvas>
+      <div class="grade" id="grade">–</div>
+      <p class="karat" id="karat-label">unexposed</p>
+    </div>
     <div class="hero-copy">
       <div class="hero-meta">
         <span id="composite">composite —</span>
@@ -64,7 +71,7 @@
   <section class="workspace hidden" id="workspace">
     <div class="list-pane">
       <div class="pane-head">
-        <h2>Examples</h2>
+        <h2>Contact sheet</h2>
         <span class="hint">J / K to move</span>
         <label class="filter">
           Lang
@@ -92,11 +99,11 @@
     </div>
     <div class="inspect-pane" id="inspector">
       <div class="pane-head">
-        <h2 id="inspect-title">Inspector</h2>
+        <h2 id="inspect-title">Loupe</h2>
         <span id="inspect-meta" class="hint"></span>
       </div>
       <div id="inspect-body" class="inspect-body">
-        <p class="hint">Select an example.</p>
+        <p class="hint">Select a frame on the contact sheet.</p>
       </div>
     </div>
   </section>
