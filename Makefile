@@ -22,7 +22,7 @@ package-smoke: package
 	python -m venv "$$tmp_dir"; \
 	"$$tmp_dir/bin/python" -m pip install --quiet --no-deps dist/*.whl; \
 	"$$tmp_dir/bin/review-eval" --help >/dev/null; \
-	"$$tmp_dir/bin/python" -c "import review_tuner; from review_tuner.studio import studio_root; assert review_tuner.__version__ == '0.9.0'; assert (studio_root() / 'index.html').is_file()"
+	"$$tmp_dir/bin/python" -c "import review_tuner; from review_tuner.studio import studio_root; assert review_tuner.__version__ == '1.0.0'; assert (studio_root() / 'index.html').is_file()"
 
 verify: lint typecheck test smoke-eval lint-data compare-smoke package-smoke
 
